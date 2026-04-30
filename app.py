@@ -697,7 +697,7 @@ if aba == "➕ Criar Prova":
 
     if "ultimo_id" in st.session_state:
         pid = st.session_state.ultimo_id
-        link = f"https://provafacil.streamlit.app/?prova={pid}"
+        link = f"https://provafacil.streamlit.app?prova={pid}"
         st.markdown("### 🔗 Link para os alunos")
         st.code(link, language=None)
         st.info("📋 Copie esse link e envie para seus alunos pelo WhatsApp, e-mail ou grupo da turma.")
