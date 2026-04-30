@@ -289,6 +289,31 @@ def init_db():
     """)
     
     conn.commit()
+    
+    # Migração: verifica se a tabela provas antiga existe sem usuario_id
+    try:
+        cursor = conn.execute("PRAGMA table_info(provas)")
+        colunas = [row[1] for row in cursor.fetchall()]
+        if 'usuario_id' not in colunas:
+            # Tabela antiga detectada, migra para a nova
+            conn.execute("ALTER TABLE provas ADD COLUMN usuario_id INTEGER DEFAULT 1")
+            conn.commit()
+    except:
+        pass
+    
+    # Migração: verifica se a tabela respostas antiga existe sem os novos campos
+    try:
+        cursor = conn.execute("PRAGMA table_info(respostas)")
+        colunas = [row[1] for row in cursor.fetchall()]
+        if 'tentativas_screenshot' not in colunas:
+            conn.execute("ALTER TABLE respostas ADD COLUMN tentativas_screenshot INTEGER DEFAULT 0")
+            conn.commit()
+        if 'alertas_fraude' not in colunas:
+            conn.execute("ALTER TABLE respostas ADD COLUMN alertas_fraude TEXT")
+            conn.commit()
+    except:
+        pass
+    
     conn.close()
 
 init_db()
