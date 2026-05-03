@@ -7,20 +7,23 @@ import pandas as pd
 import hashlib
 
 st.set_page_config(
-    page_title="ProvaFácil",
+    page_title="Prova Fácil",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 # ── CSS global ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Anti-cópia nas questões */
-.questao-texto {
+/* Anti-cópia global */
+* {
     user-select: none !important;
     -webkit-user-select: none !important;
     -moz-user-select: none !important;
+}
+/*Permitir digitação*/
+input, textarea{
+            user-select: text !important;
 }
 .stApp { background-color: #f8f9fa; }
 .bloco-questao {
@@ -418,7 +421,23 @@ def salvar_resposta_fraude(prova_id, nome_aluno):
     )
     conn.commit()
     conn.close()
-
+def excluir_prova(prova_id):
+    conn = get_conn()
+    
+    # Primeiro remove respostas associadas
+    conn.execute(
+        "DELETE FROM respostas WHERE prova_id = ?",
+        (prova_id,)
+    )
+    
+    # Depois remove a prova
+    conn.execute(
+        "DELETE FROM provas WHERE id = ?",
+        (prova_id,)
+    )
+    
+    conn.commit()
+    conn.close()
 # ── Roteamento por query param ────────────────────────────────────────────────
 params = st.query_params
 prova_id_url = params.get("prova", None)
@@ -440,23 +459,6 @@ if prova_id_url:
         <p style="margin:4px 0 0;opacity:0.85">{len(questoes)} questão(ões) • Múltipla escolha</p>
     </div>
     """, unsafe_allow_html=True)
-
-    st.error("""
-    🛡️ **PROTEÇÃO ANTI-FRAUDE ATIVA**
-    
-    ❌ **PROIBIDO:**
-    - Abrir outra aba do navegador = **Nota 0**
-    - Usar Alt+Tab = **Nota 0**
-    - Copiar e colar = **Bloqueado** (retorna `###########`)
-    - Acessar Console/DevTools = **Nota 0**
-    - Clicar com botão direito = **Bloqueado**
-    - Maximizar tela (fullscreen) = **Bloqueado**
-    - **Tirar screenshot = Registrado e notificado ao professor**
-    
-    📸 **FILIGRANA ATIVA:** Seu nome aparecerá em qualquer screenshot tirado
-    
-    ✅ Responda apenas nesta aba!
-    """)
 
     nome_aluno = st.text_input("👤 Seu nome completo", placeholder="Digite seu nome antes de começar...")
 
@@ -540,7 +542,9 @@ if prova_id_url:
 
 # ── MODO PROFESSOR (login/registro) ──────────────────────────────────────────
 if "usuario_id" not in st.session_state:
-    st.markdown("## 📝 ProvaFácil")
+    st.write("🚨 TESTE NOVO CÓDIGO 🚨")
+
+    st.markdown("## 📝 Prova Fácil")
     st.caption("Sistema de provas online com correção automática")
     
     tab_login, tab_registro = st.tabs(["🔓 Login", "📝 Criar conta"])
@@ -587,7 +591,7 @@ if "usuario_id" not in st.session_state:
     st.stop()
 
 # ── MODO PROFESSOR (após login) ──────────────────────────────────────────────
-st.markdown(f"## 📝 ProvaFácil")
+st.markdown(f"## 📝 Prova Fácil")
 st.caption(f"Bem-vindo, {st.session_state.usuario_nome}!")
 
 # Botão de logout
@@ -602,105 +606,157 @@ aba = st.sidebar.radio(
     label_visibility="collapsed"
 )
 
+# ── IMPORTANTE ──
+import base64
+
+def file_to_base64(file):
+    if file is None:
+        return None
+    return base64.b64encode(file.read()).decode("utf-8")
+
+
 # ── ABA: CRIAR PROVA ──────────────────────────────────────────────────────────
 if aba == "➕ Criar Prova":
-    st.subheader("➕ Criar nova prova")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        materia = st.selectbox("📚 Matéria", [
-            "Matemática", "Ciências", "Física", "Química", "Biologia",
-            "Português", "História", "Geografia", "Inglês", "Outra"
-        ])
-    with col2:
-        titulo = st.text_input("🏷️ Título da prova", placeholder="Ex: Prova Bimestral - Funções")
+    # ── Estado inicial ──
+    if "etapa_criacao" not in st.session_state:
+        st.session_state.etapa_criacao = 1
 
-    st.markdown("---")
-    st.markdown("### 📝 Questões")
+    if "config_prova" not in st.session_state:
+        st.session_state.config_prova = {}
 
     if "questoes_temp" not in st.session_state:
         st.session_state.questoes_temp = []
 
-    # Adicionar questão
-    with st.expander("➕ Adicionar questão", expanded=len(st.session_state.questoes_temp) == 0):
-        enunciado = st.text_area("Enunciado da questão", placeholder="Digite o enunciado...", key="novo_enunciado")
+    # ─────────────────────────────────────────────────────────────────────────
+    # 🧩 ETAPA 1 — CONFIGURAÇÃO
+    # ─────────────────────────────────────────────────────────────────────────
+    if st.session_state.etapa_criacao == 1:
+        st.subheader("➕ Criar nova prova")
 
-        st.markdown("**Opções de resposta:**")
-        letras = ["A", "B", "C", "D", "E"]
-        opcoes_novas = []
-        cols = st.columns(2)
-        for j, letra in enumerate(letras):
-            with cols[j % 2]:
-                op = st.text_input(f"Opção {letra}", key=f"op_{j}", placeholder=f"Texto da opção {letra}")
-                opcoes_novas.append(op)
+        col1, col2 = st.columns(2)
+        with col1:
+            materia = st.selectbox("📚 Matéria", [
+                "Matemática", "Ciências", "Física", "Química", "Biologia",
+                "Português", "História", "Geografia", "Inglês", "Outra"
+            ])
+        with col2:
+            titulo = st.text_input("🏷️ Título da prova")
 
-        opcoes_validas = [o for o in opcoes_novas if o.strip()]
-        letras_validas = letras[:len(opcoes_validas)]
+        col3, col4 = st.columns(2)
+        with col3:
+            qtd_questoes = st.number_input("❓ Quantas questões?", min_value=1, max_value=50, value=5)
+        with col4:
+            qtd_opcoes = st.number_input("🔘 Quantas alternativas por questão?", min_value=2, max_value=5, value=4)
 
-        gabarito = st.selectbox(
-            "✅ Resposta correta",
-            letras_validas if opcoes_validas else ["—"],
-            key="gabarito_sel"
-        )
-
-        if st.button("Adicionar questão ✚", type="secondary"):
-            if not enunciado.strip():
-                st.warning("Digite o enunciado da questão.")
-            elif len(opcoes_validas) < 2:
-                st.warning("Adicione pelo menos 2 opções.")
-            elif gabarito == "—":
-                st.warning("Selecione a resposta correta.")
+        if st.button("➡️ Próximo", type="primary"):
+            if not titulo.strip():
+                st.warning("Digite um título.")
             else:
-                st.session_state.questoes_temp.append({
-                    "enunciado": enunciado.strip(),
-                    "opcoes": opcoes_validas,
-                    "gabarito": gabarito
-                })
-                st.success(f"✅ Questão {len(st.session_state.questoes_temp)} adicionada!")
+                st.session_state.config_prova = {
+                    "materia": materia,
+                    "titulo": titulo,
+                    "qtd_questoes": qtd_questoes,
+                    "qtd_opcoes": qtd_opcoes
+                }
+                st.session_state.questoes_temp = [{} for _ in range(qtd_questoes)]
+                st.session_state.etapa_criacao = 2
                 st.rerun()
 
-    # Listar questões adicionadas
-    if st.session_state.questoes_temp:
-        st.markdown(f"**{len(st.session_state.questoes_temp)} questão(ões) adicionada(s):**")
-        for i, q in enumerate(st.session_state.questoes_temp):
-            with st.container():
-                cols = st.columns([0.85, 0.15])
-                with cols[0]:
-                    letras = ["A", "B", "C", "D", "E"]
-                    opcoes_str = " | ".join([
-                        f"**{letras[j]}✓**" if letras[j] == q["gabarito"] else letras[j]
-                        for j in range(len(q["opcoes"]))
-                    ])
-                    st.markdown(f"**Q{i+1}.** {q['enunciado']}  \n{opcoes_str}")
-                with cols[1]:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        st.session_state.questoes_temp.pop(i)
-                        st.rerun()
-                st.divider()
+    # ─────────────────────────────────────────────────────────────────────────
+    # 🧩 ETAPA 2 — CRIAR QUESTÕES
+    # ─────────────────────────────────────────────────────────────────────────
+    elif st.session_state.etapa_criacao == 2:
+        config = st.session_state.config_prova
+
+        st.subheader(f"📝 {config['titulo']}")
+        st.caption(f"{config['materia']} • {config['qtd_questoes']} questões")
+
+        letras = ["A", "B", "C", "D", "E"]
+
+        for i in range(config["qtd_questoes"]):
+            with st.expander(f"Questão {i+1}", expanded=(i == 0)):
+
+                enunciado = st.text_area(f"Enunciado", key=f"enunciado_{i}")
+
+                # 📷 imagem da questão
+                img_q = st.file_uploader(
+                    "Imagem da questão (opcional)",
+                    type=["png", "jpg", "jpeg"],
+                    key=f"img_q_{i}"
+                )
+
+                opcoes = []
+                imagens_opcoes = []
+
+                for j in range(config["qtd_opcoes"]):
+                    col1, col2 = st.columns([0.7, 0.3])
+
+                    with col1:
+                        texto = st.text_input(f"{letras[j]}", key=f"op_{i}_{j}")
+                        opcoes.append(texto)
+
+                    with col2:
+                        img_op = st.file_uploader(
+                            f"Img {letras[j]}",
+                            type=["png", "jpg", "jpeg"],
+                            key=f"img_op_{i}_{j}"
+                        )
+                        imagens_opcoes.append(img_op)
+
+                gabarito = st.selectbox(
+                    "Resposta correta",
+                    letras[:config["qtd_opcoes"]],
+                    key=f"gabarito_{i}"
+                )
+
+                # ✔️ SALVA JÁ CONVERTIDO PARA BASE64
+                st.session_state.questoes_temp[i] = {
+                    "enunciado": enunciado,
+                    "imagem": file_to_base64(img_q),
+                    "opcoes": opcoes,
+                    "imagens_opcoes": [file_to_base64(img) for img in imagens_opcoes],
+                    "gabarito": gabarito
+                }
 
         st.markdown("---")
+
         colA, colB = st.columns(2)
+
+        # 🚀 salvar prova
         with colA:
-            if st.button("🚀 Gerar Prova e Link", type="primary", use_container_width=True):
-                if not titulo.strip():
-                    st.warning("Dê um título para a prova.")
-                else:
-                    prova_id = salvar_prova(st.session_state.usuario_id, materia, titulo.strip(), st.session_state.questoes_temp)
-                    st.session_state.questoes_temp = []
-                    st.session_state.ultimo_id = prova_id
-                    st.success(f"✅ Prova criada com sucesso! ID: `{prova_id}`")
-                    st.rerun()
-        with colB:
-            if st.button("🗑️ Limpar tudo", use_container_width=True):
+            if st.button("🚀 Gerar Prova", type="primary", use_container_width=True):
+                prova_id = salvar_prova(
+                    st.session_state.usuario_id,
+                    config["materia"],
+                    config["titulo"],
+                    st.session_state.questoes_temp
+                )
+
+                st.success(f"✅ Prova criada! ID: {prova_id}")
+
+                st.session_state.etapa_criacao = 1
                 st.session_state.questoes_temp = []
+                st.session_state.ultimo_id = prova_id
+
                 st.rerun()
 
+        # 🔙 voltar
+        with colB:
+            if st.button("⬅️ Voltar", use_container_width=True):
+                st.session_state.etapa_criacao = 1
+                st.rerun()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 🔗 LINK FINAL
+    # ─────────────────────────────────────────────────────────────────────────
     if "ultimo_id" in st.session_state:
         pid = st.session_state.ultimo_id
         link = f"https://provafacil.streamlit.app?prova={pid}"
+
         st.markdown("### 🔗 Link para os alunos")
         st.code(link, language=None)
-        st.info("📋 Copie esse link e envie para seus alunos pelo WhatsApp, e-mail ou grupo da turma.")
+        st.info("📋 Envie esse link para seus alunos.")
 
 # ── ABA: VER RESULTADOS ───────────────────────────────────────────────────────
 elif aba == "📊 Ver Resultados":
@@ -782,17 +838,53 @@ elif aba == "📋 Minhas Provas":
     st.subheader("📋 Provas criadas")
 
     provas = listar_provas(st.session_state.usuario_id)
+
     if not provas:
         st.info("Nenhuma prova criada ainda. Vá em 'Criar Prova' para começar.")
         st.stop()
 
+    # ── 🔽 FILTRO POR MATÉRIA ──
+    materias = sorted(list(set([p["materia"] for p in provas])))
+    materias.insert(0, "Todas")
+
+    materia_selecionada = st.selectbox("📚 Filtrar por matéria", materias)
+
+    # aplica filtro
+    if materia_selecionada != "Todas":
+        provas = [p for p in provas if p["materia"] == materia_selecionada]
+
+    # ── LISTAGEM ──
     for p in provas:
         questoes = json.loads(p["questoes"])
         respostas = buscar_respostas(p["id"])
+
         with st.container():
-            col1, col2 = st.columns([0.75, 0.25])
+            col1, col2, col3 = st.columns([0.65, 0.2, 0.15])
+
             with col1:
-                st.markdown(f"**{p['titulo']}**  \n📚 {p['materia']} • {len(questoes)} questões • {len(respostas)} resposta(s) • {p['criada_em']}")
+                st.markdown(
+                    f"**{p['titulo']}**  \n📚 {p['materia']} • {len(questoes)} questões • {len(respostas)} resposta(s) • {p['criada_em']}"
+                )
+
             with col2:
                 st.code(p["id"], language=None)
+
+            if f"confirm_{p['id']}" not in st.session_state:
+                st.session_state[f"confirm_{p['id']}"] = False
+
+            with col3:
+                if not st.session_state[f"confirm_{p['id']}"]:
+                    if st.button("🗑️", key=f"del_{p['id']}"):
+                        st.session_state[f"confirm_{p['id']}"] = True
+                else:
+                    st.warning("Confirmar?")
+                    
+                    if st.button("✅ Sim", key=f"yes_{p['id']}"):
+                        excluir_prova(p["id"])
+                        st.success("Prova excluída!")
+                        st.rerun()
+
+                    if st.button("❌ Não", key=f"no_{p['id']}"):
+                        st.session_state[f"confirm_{p['id']}"] = False
+
             st.divider()
