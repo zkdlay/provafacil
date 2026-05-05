@@ -12,6 +12,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ── Limpar sessão ao mudar de prova ──────────────────────────────────────────
+params = st.query_params
+prova_id_atual = params.get("prova", None)
+
+if "prova_id_anterior" not in st.session_state:
+    st.session_state.prova_id_anterior = prova_id_atual
+
+if prova_id_atual != st.session_state.prova_id_anterior:
+    # Mudou de prova, limpa identificação do aluno
+    st.session_state.aluno_identificado = False
+    st.session_state.nome_aluno = ""
+    st.session_state.chamada_aluno = ""
+    st.session_state.prova_id_anterior = prova_id_atual
+    st.rerun()
 # ── CSS global ──────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -63,49 +78,44 @@ input, textarea{
     position: fixed;
     top: 0;
     left: 0;
-    width: 100%;
-    height: 100%;
+    width: 200%;
+    height: 200%;
     pointer-events: none;
-    z-index: 9998;
-    font-size: 24px;
+    z-index: 999999 !important;
+    font-size: 28px;
     font-weight: bold;
-    color: rgba(200, 50, 50, 0.08);
-    transform: rotate(-45deg);
-    line-height: 40px;
-    overflow: hidden;
-    word-wrap: break-word;
+    color: rgba(0, 0, 0, 0.15);
+    transform: rotate(-30deg);
+    line-height: 60px;
     white-space: pre-wrap;
 }
 </style>
 
 <script>
-// ── ANTI-FRAUDE RIGOROSO ──
-// 0. Adiciona filigrana (watermark) com nome do aluno
-function adicionarFicha(nomeAluno) {
-    var watermark = document.createElement('div');
-    watermark.className = 'watermark';
-    var texto = '';
-    for (var i = 0; i < 20; i++) {
-        texto += nomeAluno + ' - ';
+function criarWatermark(nome) {
+    let existente = document.querySelector('.watermark');
+    if (existente) existente.remove();
+
+    const wm = document.createElement('div');
+    wm.className = 'watermark';
+
+    let texto = '';
+    for (let i = 0; i < 100; i++) {
+        texto += nome + '   ';
     }
-    watermark.textContent = texto;
-    document.body.appendChild(watermark);
+
+    wm.textContent = texto;
+    document.body.appendChild(wm);
 }
 
-// Aguarda o nome ser digitado e aplica a filigrana
-var observer = new MutationObserver(function(mutations) {
-    var inputs = document.querySelectorAll('input[placeholder*="nome"]');
-    if (inputs.length > 0) {
-        inputs[0].addEventListener('input', function(e) {
-            if (e.target.value.trim().length > 0) {
-                var old = document.querySelector('.watermark');
-                if (old) old.remove();
-                adicionarFicha(e.target.value.trim());
-            }
-        });
+// tenta capturar QUALQUER input (mais robusto que placeholder)
+setInterval(() => {
+    const input = document.querySelector('input');
+
+    if (input && input.value.trim().length > 0) {
+        criarWatermark(input.value.trim());
     }
-});
-observer.observe(document.body, { childList: true, subtree: true });
+}, 1000);
 
 // 1. Bloqueia copiar/colar/clicar direito
 document.addEventListener('copy', function(e) {
@@ -253,6 +263,16 @@ def get_conn():
 def init_db():
     conn = get_conn()
     
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS eventos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prova_id TEXT,
+            nome_aluno TEXT,
+            evento TEXT,
+            detalhe TEXT,
+            timestamp TEXT
+        )
+        """)
     # Tabela de usuários (professores)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
@@ -342,6 +362,12 @@ def registrar_professor(usuario, senha):
         conn.close()
         return False, f"❌ Erro: {str(e)}"
 
+def buscar_materias():
+    conn = get_conn()
+    rows = conn.execute("SELECT DISTINCT materia FROM provas").fetchall()
+    conn.close()
+    return [r["materia"] for r in rows if r["materia"]]
+
 def verificar_login(usuario, senha):
     conn = get_conn()
     row = conn.execute(
@@ -366,6 +392,26 @@ def salvar_prova(usuario_id, materia, titulo, questoes):
     conn.close()
     return prova_id
 
+def registrar_evento(prova_id, nome_aluno, evento, detalhe=""):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO eventos (prova_id, nome_aluno, evento, detalhe, timestamp) VALUES (?,?,?,?,?)",
+        (prova_id, nome_aluno, evento, detalhe, datetime.now().strftime("%H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+
+def atualizar_prova(prova_id, materia, titulo, questoes):
+    """Atualiza uma prova existente"""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE provas SET materia=?, titulo=?, questoes=? WHERE id=?",
+        (materia, titulo, json.dumps(questoes, ensure_ascii=False), prova_id)
+    )
+    conn.commit()
+    conn.close()
+    return prova_id
+
 def buscar_prova(prova_id):
     conn = get_conn()
     row = conn.execute("SELECT * FROM provas WHERE id=?", (prova_id,)).fetchone()
@@ -382,6 +428,19 @@ def listar_provas(usuario_id):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+def aluno_ja_respondeu(prova_id, nome_aluno):
+    """Verifica se o aluno já respondeu esta prova"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT id FROM respostas WHERE prova_id=? AND nome_aluno=?",
+        (prova_id, nome_aluno)
+    ).fetchone()
+    conn.close()
+    resultado = row is not None
+    # DEBUG:
+    # st.write(f"🔍 DEBUG: aluno_ja_respondeu(prova={prova_id}, nome={nome_aluno}) = {resultado}")
+    return resultado
 
 def salvar_resposta(prova_id, nome_aluno, respostas_aluno, nota):
     conn = get_conn()
@@ -442,102 +501,173 @@ def excluir_prova(prova_id):
 params = st.query_params
 prova_id_url = params.get("prova", None)
 
-# ── MODO ALUNO (respondendo prova) ────────────────────────────────────────────
-if prova_id_url:
-    prova = buscar_prova(prova_id_url)
+params = st.query_params
+try:
+    if st.request:
+        data = st.request.json
+        if data:
+            if data.get("acao") == "saiu_da_aba":
+                registrar_evento(
+                    prova_id=st.query_params.get("prova"),
+                    nome_aluno=st.session_state.get("nome_aluno", "desconhecido"),
+                    evento="troca_aba",
+                    detalhe=data.get("motivo", "")
+                )
+except:
+    pass
+if "prova" in params:
+    prova_id = params["prova"]
+
+    # controle de acesso
+    if "aluno_logado" not in st.session_state:
+        st.session_state.aluno_logado = False
+    
+    # Inicializar estado da prova
+    if "prova_enviada" not in st.session_state:
+        st.session_state.prova_enviada = False
+    
+    if "nota" not in st.session_state:
+        st.session_state.nota = None
+    
+    if "respostas_final" not in st.session_state:
+        st.session_state.respostas_final = {}
+
+    # ── TELA DE LOGIN DO ALUNO ──
+    if not st.session_state.aluno_logado:
+        st.title("📝 Acesso à Prova")
+
+        nome = st.text_input("Nome completo")
+        numero = st.text_input("Número de chamada")
+        registrar_evento(prova_id, nome, "login", f"Chamada: {numero}")
+        if st.button("Acessar prova", type="primary"):
+            if not nome.strip() or not numero.strip():
+                st.warning("Preencha todos os campos.")
+            else:
+                st.session_state.aluno_logado = True
+                st.session_state.nome_aluno = nome
+                st.session_state.numero_aluno = numero
+                st.rerun()
+
+        st.stop()
+    
+    # ── CARREGAR PROVA ──
+    prova = buscar_prova(prova_id)
 
     if not prova:
-        st.error("❌ Prova não encontrada. Verifique o link com seu professor.")
+        st.error("Prova não encontrada.")
         st.stop()
 
     questoes = json.loads(prova["questoes"])
 
-    st.markdown(f"""
-    <div class="header-prova">
-        <div class="badge-materia">📚 {prova['materia']}</div>
-        <h1 style="margin:0;font-size:1.8rem">{prova['titulo']}</h1>
-        <p style="margin:4px 0 0;opacity:0.85">{len(questoes)} questão(ões) • Múltipla escolha</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.title(prova["titulo"])
+    st.caption(f"{prova['materia']}")
+    
+    # 🔒 BLOQUEAR aluno que já respondeu (APÓS carregar a prova)
+    if st.session_state.aluno_logado and hasattr(st.session_state, 'nome_aluno') and st.session_state.nome_aluno:
+        if aluno_ja_respondeu(prova_id, st.session_state.nome_aluno):
+            st.error("⚠️ Você já enviou esta prova. Não é possível responder novamente.")
 
-    nome_aluno = st.text_input("👤 Seu nome completo", placeholder="Digite seu nome antes de começar...")
-
-    respostas_aluno = {}
-    todas_respondidas = True
-
-    for i, q in enumerate(questoes):
-        st.markdown(f"""
-        <div class="bloco-questao">
-            <p style="font-size:12px;color:#7C3AED;font-weight:600;margin:0 0 6px">QUESTÃO {i+1}</p>
-            <p class="questao-texto" style="font-size:16px;font-weight:500;color:#1a1a1a;margin:0">
-                {q['enunciado']}
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        opcoes = q["opcoes"]
-        letras = ["A", "B", "C", "D", "E"]
-        opcoes_exibicao = [f"{letras[j]}) {opcoes[j]}" for j in range(len(opcoes))]
-
-        escolha = st.radio(
-            f"Resposta da questão {i+1}",
-            options=opcoes_exibicao,
-            index=None,
-            key=f"radio_{i}",
-            label_visibility="collapsed"
-        )
-
-        if escolha:
-            letra_escolhida = escolha[0]
-            respostas_aluno[f"q{i}"] = letra_escolhida
-        else:
-            todas_respondidas = False
-
-    st.markdown("---")
-
-    if st.button("📨 Enviar Prova", type="primary", use_container_width=True):
-        if not nome_aluno.strip():
-            st.warning("Por favor, insira seu nome antes de enviar.")
-        elif not todas_respondidas:
-            st.warning("Responda todas as questões antes de enviar.")
-        else:
-            nota = calcular_nota(questoes, respostas_aluno)
-            salvar_resposta(prova_id_url, nome_aluno.strip(), respostas_aluno, nota)
-
-            st.balloons()
-            cor = "#16a34a" if nota >= 7 else "#d97706" if nota >= 5 else "#dc2626"
-            emoji = "🏆" if nota >= 7 else "📖" if nota >= 5 else "💪"
-
-            acertos = sum(
-                1 for i, q in enumerate(questoes)
-                if respostas_aluno.get(f"q{i}") == q["gabarito"]
+            respostas = buscar_respostas(prova_id)
+            resposta_aluno = next(
+                (r for r in respostas if r["nome_aluno"] == st.session_state.nome_aluno),
+                None
             )
 
-            st.markdown(f"""
-            <div style="background:white;border-radius:16px;padding:2.5rem;text-align:center;
-                        border:2px solid {cor};margin-top:1rem">
-                <div style="font-size:3rem">{emoji}</div>
-                <h2 style="color:{cor};font-size:2.5rem;margin:0.5rem 0">{nota}</h2>
-                <p style="color:#555;font-size:1.1rem">
-                    Você acertou <strong>{acertos} de {len(questoes)}</strong> questões
-                </p>
-                <p style="color:#888;font-size:14px">Prova enviada com sucesso, {nome_aluno}!</p>
-            </div>
-            """, unsafe_allow_html=True)
+            if resposta_aluno:
+                st.write(f"**Nota:** {resposta_aluno['nota']}/10")
+                st.write(f"**Data:** {resposta_aluno['respondida_em']}")
+                
+                # ✅ MOSTRAR GABARITO MESMO ASSIM
+                st.session_state.prova_enviada = True
+                st.session_state.nota = resposta_aluno['nota']
+                st.session_state.respostas_final = json.loads(resposta_aluno['respostas'])
 
-            # Mostrar gabarito
-            with st.expander("📋 Ver gabarito"):
-                letras = ["A", "B", "C", "D", "E"]
-                for i, q in enumerate(questoes):
-                    sua = respostas_aluno.get(f"q{i}", "—")
-                    correta = q["gabarito"]
-                    acertou = sua == correta
-                    icone = "✅" if acertou else "❌"
-                    st.markdown(f"""
-                    **{icone} Questão {i+1}:** {q['enunciado']}
-                    - Sua resposta: **{sua}**  |  Correta: **{correta}**
-                    """)
 
+    respostas_aluno = {}
+
+    letras = ["A", "B", "C", "D", "E"]
+
+    # Se ainda não respondeu, renderiza em modo edição
+    if not st.session_state.prova_enviada:
+        for i, q in enumerate(questoes):
+            st.markdown(f"### Questão {i+1}")
+            st.write(q["enunciado"])
+
+            # imagem da questão (se existir)
+            if q.get("imagem"):
+                st.image(f"data:image/png;base64,{q['imagem']}")
+
+            op = st.radio(
+                "Escolha:",
+                options=letras[:len(q["opcoes"])],
+                format_func=lambda x: f"{x}) {q['opcoes'][letras.index(x)]}",
+                key=f"q_{i}",
+                disabled=st.session_state.prova_enviada  # 🔒 trava depois do envio
+            )
+
+            respostas_aluno[f"q{i}"] = op if op else None
+
+            st.divider()
+        
+        # Botão de envio com anti-duplicação
+        if st.button("📨 Enviar prova", type="primary"):
+
+            # 🚫 segurança extra (anti-fraude)
+            if aluno_ja_respondeu(prova_id, st.session_state.nome_aluno):
+                st.error("Prova já enviada anteriormente.")
+                st.stop()
+
+            nota = calcular_nota(questoes, respostas_aluno)
+
+            salvar_resposta(
+                prova_id,
+                st.session_state.nome_aluno,
+                respostas_aluno,
+                nota
+            )
+
+            st.session_state.prova_enviada = True
+            st.session_state.nota = nota
+            st.session_state.respostas_final = respostas_aluno
+
+            st.success("Prova enviada com sucesso!")
+            st.rerun()
+
+    # 📊 Modo leitura (resultado + gabarito)
+    if st.session_state.prova_enviada:
+        st.markdown("## 📊 Resultado")
+
+        nota = st.session_state.nota
+        respostas_final = st.session_state.respostas_final
+
+        acertos = sum(
+            1 for i, q in enumerate(questoes)
+            if respostas_final.get(f"q{i}") == q["gabarito"]
+        )
+
+        st.write(f"Nota: {nota}")
+        st.write(f"Acertos: {acertos}/{len(questoes)}")
+
+        with st.expander("📋 Ver gabarito completo"):
+            for i, q in enumerate(questoes):
+                sua = respostas_final.get(f"q{i}", "—")
+                correta = q["gabarito"]
+
+                acertou = sua == correta
+                icone = "✅" if acertou else "❌"
+                
+                # Pega o texto da opção correta
+                idx_correta = letras.index(correta)
+                texto_correta = q["opcoes"][idx_correta]
+                
+                st.write(f"{icone} **Q{i+1}**")
+                st.write(f"📋 Enunciado: {q['enunciado']}")
+                st.write(f"✓ Resposta correta: **{correta}) {texto_correta}**")
+                if sua != correta:
+                    st.write(f"✗ Sua resposta: {sua}")
+                st.divider()
+    
+    # 🛑 Parar execução (evitar misturar com professor)
     st.stop()
 
 # ── MODO PROFESSOR (login/registro) ──────────────────────────────────────────
@@ -602,7 +732,7 @@ if st.sidebar.button("🚪 Sair", type="secondary"):
 
 aba = st.sidebar.radio(
     "Navegação",
-    ["➕ Criar Prova", "📊 Ver Resultados", "📋 Minhas Provas"],
+    ["➕ Criar Prova", "📊 Ver Resultados", "📋 Minhas Provas","🟢 Monitoramento"],
     label_visibility="collapsed"
 )
 
@@ -621,25 +751,60 @@ if aba == "➕ Criar Prova":
     # ── Estado inicial ──
     if "etapa_criacao" not in st.session_state:
         st.session_state.etapa_criacao = 1
+    
+    if "modo_edicao" not in st.session_state:
+        st.session_state.modo_edicao = False
+    
+    if "prova_edicao_id" not in st.session_state:
+        st.session_state.prova_edicao_id = None
 
     if "config_prova" not in st.session_state:
         st.session_state.config_prova = {}
 
     if "questoes_temp" not in st.session_state:
         st.session_state.questoes_temp = []
+    
+    # 🔄 Se entrou em modo edição, carrega a prova
+    if st.session_state.modo_edicao and st.session_state.prova_edicao_id:
+        prova_editar = buscar_prova(st.session_state.prova_edicao_id)
+        if prova_editar:
+            questoes_original = json.loads(prova_editar["questoes"])
+            st.session_state.config_prova = {
+                "materia": prova_editar["materia"],
+                "titulo": prova_editar["titulo"],
+                "qtd_questoes": len(questoes_original),
+                "qtd_opcoes": len(questoes_original[0]["opcoes"]) if questoes_original else 5
+            }
+            st.session_state.questoes_temp = questoes_original
+            st.session_state.etapa_criacao = 2
 
     # ─────────────────────────────────────────────────────────────────────────
     # 🧩 ETAPA 1 — CONFIGURAÇÃO
     # ─────────────────────────────────────────────────────────────────────────
     if st.session_state.etapa_criacao == 1:
-        st.subheader("➕ Criar nova prova")
+        titulo_etapa = "✏️ Editar prova" if st.session_state.modo_edicao else "➕ Criar nova prova"
+        st.subheader(titulo_etapa)
 
         col1, col2 = st.columns(2)
         with col1:
-            materia = st.selectbox("📚 Matéria", [
+            opcoes_padrao = [
                 "Matemática", "Ciências", "Física", "Química", "Biologia",
-                "Português", "História", "Geografia", "Inglês", "Outra"
-            ])
+                "Português", "História", "Geografia", "Inglês"
+            ]
+
+            if "materias_custom" not in st.session_state:
+                st.session_state.materias_custom = []
+
+            todas_opcoes = opcoes_padrao + st.session_state.materias_custom + ["Outra"]
+
+            materia_selecionada = st.selectbox("📚 Matéria", todas_opcoes)
+
+            if materia_selecionada == "Outra":
+                materia_custom = st.text_input("Digite a matéria")
+                materia = materia_custom.strip() if materia_custom.strip() else ""
+            else:
+                materia = materia_selecionada
+
         with col2:
             titulo = st.text_input("🏷️ Título da prova")
 
@@ -648,17 +813,29 @@ if aba == "➕ Criar Prova":
             qtd_questoes = st.number_input("❓ Quantas questões?", min_value=1, max_value=50, value=5)
         with col4:
             qtd_opcoes = st.number_input("🔘 Quantas alternativas por questão?", min_value=2, max_value=5, value=4)
-
+        
         if st.button("➡️ Próximo", type="primary"):
             if not titulo.strip():
                 st.warning("Digite um título.")
+            elif not materia:
+                st.warning("Digite a matéria.")
             else:
+                # evita duplicata tipo "matemática" vs "Matemática"
+                materia_normalizada = materia.strip()
+
+                if (
+                    materia_normalizada not in opcoes_padrao and
+                    materia_normalizada not in st.session_state.materias_custom
+                ):
+                    st.session_state.materias_custom.append(materia_normalizada)
+
                 st.session_state.config_prova = {
-                    "materia": materia,
+                    "materia": materia_normalizada,
                     "titulo": titulo,
                     "qtd_questoes": qtd_questoes,
                     "qtd_opcoes": qtd_opcoes
                 }
+
                 st.session_state.questoes_temp = [{} for _ in range(qtd_questoes)]
                 st.session_state.etapa_criacao = 2
                 st.rerun()
@@ -723,21 +900,36 @@ if aba == "➕ Criar Prova":
 
         colA, colB = st.columns(2)
 
-        # 🚀 salvar prova
+        # 🚀 salvar ou atualizar prova
         with colA:
-            if st.button("🚀 Gerar Prova", type="primary", use_container_width=True):
-                prova_id = salvar_prova(
-                    st.session_state.usuario_id,
-                    config["materia"],
-                    config["titulo"],
-                    st.session_state.questoes_temp
-                )
+            botao_texto = "💾 Atualizar Prova" if st.session_state.modo_edicao else "🚀 Gerar Prova"
+            if st.button(botao_texto, type="primary", use_container_width=True):
+                if st.session_state.modo_edicao:
+                    # Modo edição: atualizar prova existente
+                    prova_id = st.session_state.prova_edicao_id
+                    atualizar_prova(
+                        prova_id,
+                        config["materia"],
+                        config["titulo"],
+                        st.session_state.questoes_temp
+                    )
+                    st.success(f"✅ Prova atualizada! ID: {prova_id}")
+                else:
+                    # Modo criação: criar nova prova
+                    prova_id = salvar_prova(
+                        st.session_state.usuario_id,
+                        config["materia"],
+                        config["titulo"],
+                        st.session_state.questoes_temp
+                    )
+                    st.success(f"✅ Prova criada! ID: {prova_id}")
+                    st.session_state.ultimo_id = prova_id
 
-                st.success(f"✅ Prova criada! ID: {prova_id}")
-
+                # Limpar estado
                 st.session_state.etapa_criacao = 1
                 st.session_state.questoes_temp = []
-                st.session_state.ultimo_id = prova_id
+                st.session_state.modo_edicao = False
+                st.session_state.prova_edicao_id = None
 
                 st.rerun()
 
@@ -745,6 +937,8 @@ if aba == "➕ Criar Prova":
         with colB:
             if st.button("⬅️ Voltar", use_container_width=True):
                 st.session_state.etapa_criacao = 1
+                st.session_state.modo_edicao = False
+                st.session_state.prova_edicao_id = None
                 st.rerun()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -752,7 +946,7 @@ if aba == "➕ Criar Prova":
     # ─────────────────────────────────────────────────────────────────────────
     if "ultimo_id" in st.session_state:
         pid = st.session_state.ultimo_id
-        link = f"https://provafacil.streamlit.app?prova={pid}"
+        link = f"http://localhost:8501?prova={pid}"
 
         st.markdown("### 🔗 Link para os alunos")
         st.code(link, language=None)
@@ -833,6 +1027,48 @@ elif aba == "📊 Ver Resultados":
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Baixar resultados em CSV", csv, "resultados.csv", "text/csv")
 
+# ── ABA: MONITORAMENTO ────────────────────────────────────────────────────────
+import time
+
+time.sleep(3)
+st.rerun()
+elif aba == "🟢 Monitoramento":
+    st.subheader("🟢 Monitoramento em Tempo Real")
+
+    provas = listar_provas(st.session_state.usuario_id)
+
+    if not provas:
+        st.info("Nenhuma prova disponível.")
+        st.stop()
+
+    opcoes = {f"{p['titulo']} ({p['materia']})": p["id"] for p in provas}
+    escolha = st.selectbox("Selecione a prova", list(opcoes.keys()))
+    prova_id = opcoes[escolha]
+
+    # 🔄 auto refresh
+    st.caption("Atualiza automaticamente a cada 3 segundos")
+    st.experimental_rerun if False else None
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM eventos WHERE prova_id=? ORDER BY id DESC",
+        (prova_id,)
+    ).fetchall()
+    conn.close()
+import pandas as pd
+
+dados = []
+
+for r in rows:
+    dados.append({
+        "Aluno": r["nome_aluno"],
+        "Evento": r["evento"],
+        "Detalhe": r["detalhe"],
+        "Hora": r["timestamp"]
+    })
+
+df = pd.DataFrame(dados)
+
+st.dataframe(df, use_container_width=True)
 # ── ABA: MINHAS PROVAS ────────────────────────────────────────────────────────
 elif aba == "📋 Minhas Provas":
     st.subheader("📋 Provas criadas")
@@ -859,32 +1095,44 @@ elif aba == "📋 Minhas Provas":
         respostas = buscar_respostas(p["id"])
 
         with st.container():
-            col1, col2, col3 = st.columns([0.65, 0.2, 0.15])
-
+            # Primeira linha: Informações da prova
+            st.markdown(
+                f"**{p['titulo']}**  \n📚 {p['materia']} • {len(questoes)} questões • {len(respostas)} resposta(s) • {p['criada_em']}"
+            )
+            
+            # Segunda linha: ID, Botões de ação
+            col1, col2= st.columns([0.5, 0.5])
+            
             with col1:
-                st.markdown(
-                    f"**{p['titulo']}**  \n📚 {p['materia']} • {len(questoes)} questões • {len(respostas)} resposta(s) • {p['criada_em']}"
-                )
-
+                # 🔗 Botão para copiar link
+                link = f"http://localhost:8501?prova={p['id']}"
+                if st.button("🔗 Copiar Link", key=f"copy_{p['id']}", use_container_width=True):
+                    st.code(link, language=None)
+                    st.success("✅ Link copiado! Compartilhe com seus alunos.")
+            
             with col2:
-                st.code(p["id"], language=None)
+                # 🗑️ Botão para deletar
+                if f"confirm_{p['id']}" not in st.session_state:
+                    st.session_state[f"confirm_{p['id']}"] = False
 
-            if f"confirm_{p['id']}" not in st.session_state:
-                st.session_state[f"confirm_{p['id']}"] = False
-
-            with col3:
                 if not st.session_state[f"confirm_{p['id']}"]:
-                    if st.button("🗑️", key=f"del_{p['id']}"):
+                    if st.button("🗑️ Deletar", key=f"del_{p['id']}", use_container_width=True):
                         st.session_state[f"confirm_{p['id']}"] = True
-                else:
-                    st.warning("Confirmar?")
-                    
-                    if st.button("✅ Sim", key=f"yes_{p['id']}"):
-                        excluir_prova(p["id"])
-                        st.success("Prova excluída!")
                         st.rerun()
+                else:
+                    st.warning("Tem certeza?")
+                    
+                    col_sim, col_nao = st.columns(2)
+                    
+                    with col_sim:
+                        if st.button("✅ Deletar", key=f"yes_{p['id']}", use_container_width=True):
+                            excluir_prova(p["id"])
+                            st.success("Prova excluída!")
+                            st.rerun()
 
-                    if st.button("❌ Não", key=f"no_{p['id']}"):
-                        st.session_state[f"confirm_{p['id']}"] = False
+                    with col_nao:
+                        if st.button("❌ Cancelar", key=f"no_{p['id']}", use_container_width=True):
+                            st.session_state[f"confirm_{p['id']}"] = False
+                            st.rerun()
 
             st.divider()
