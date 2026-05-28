@@ -69,6 +69,8 @@ function AuthProfessor({ onLogin }) {
         method: "POST",
         body: JSON.stringify({ usuario, senha })
       });
+      setUsuario("");
+      setSenha("");
       onLogin(data);
       completed = true;
     } catch (e) {
@@ -96,6 +98,8 @@ function AuthProfessor({ onLogin }) {
         method: "POST",
         body: JSON.stringify({ usuario, senha })
       });
+      setUsuario("");
+      setSenha("");
       onLogin(data);
       completed = true;
     } catch (e) {
@@ -119,6 +123,7 @@ function AuthProfessor({ onLogin }) {
           placeholder="Usuario"
           value={usuario}
           disabled={Boolean(authAction)}
+          autoComplete="username"
           onChange={(e) => setUsuario(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") entrar();
@@ -129,6 +134,7 @@ function AuthProfessor({ onLogin }) {
           type="password"
           value={senha}
           disabled={Boolean(authAction)}
+          autoComplete="current-password"
           onChange={(e) => setSenha(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") entrar();
