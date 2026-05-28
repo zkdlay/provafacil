@@ -15,12 +15,14 @@ app = FastAPI(title="Prova Facil API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://provafacil-rust.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 
