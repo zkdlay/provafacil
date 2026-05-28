@@ -119,35 +119,39 @@ function AuthProfessor({ onLogin }) {
         <p className="auth-kicker">Prova Facil</p>
         <h2>Login do Professor</h2>
         <p className="auth-subtitle">Acesse sua conta para criar e acompanhar provas.</p>
-        <input
-          placeholder="Usuario"
-          value={usuario}
-          disabled={Boolean(authAction)}
-          autoComplete="username"
-          onChange={(e) => setUsuario(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") entrar();
+        <form
+          autoComplete="off"
+          onSubmit={(e) => {
+            e.preventDefault();
+            entrar();
           }}
-        />
-        <input
-          placeholder="Senha"
-          type="password"
-          value={senha}
-          disabled={Boolean(authAction)}
-          autoComplete="current-password"
-          onChange={(e) => setSenha(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") entrar();
-          }}
-        />
-        <div className="actions auth-actions">
-          <button onClick={entrar} disabled={Boolean(authAction)}>
-            {authAction === "login" ? "Entrando..." : "Entrar"}
-          </button>
-          <button className="secondary" onClick={registrar} disabled={Boolean(authAction)}>
-            {authAction === "register" ? "Criando..." : "Criar conta"}
-          </button>
-        </div>
+        >
+          <input
+            placeholder="Usuario"
+            name="pf_usuario"
+            value={usuario}
+            disabled={Boolean(authAction)}
+            autoComplete="off"
+            onChange={(e) => setUsuario(e.target.value)}
+          />
+          <input
+            placeholder="Senha"
+            type="password"
+            name="pf_senha"
+            value={senha}
+            disabled={Boolean(authAction)}
+            autoComplete="new-password"
+            onChange={(e) => setSenha(e.target.value)}
+          />
+          <div className="actions auth-actions">
+            <button type="submit" disabled={Boolean(authAction)}>
+              {authAction === "login" ? "Entrando..." : "Entrar"}
+            </button>
+            <button type="button" className="secondary" onClick={registrar} disabled={Boolean(authAction)}>
+              {authAction === "register" ? "Criando..." : "Criar conta"}
+            </button>
+          </div>
+        </form>
         {erro ? <p className="erro">{erro}</p> : null}
       </section>
     </main>
