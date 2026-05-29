@@ -69,6 +69,30 @@ class ProvaService:
         Queries.bloquear_acesso_prova(prova_id, token)
 
     @staticmethod
+    def criar_ou_atualizar_aluno_acesso(prova_id, token, nome_aluno, device_id):
+        return Queries.criar_ou_atualizar_aluno_acesso(prova_id, token, nome_aluno, device_id)
+
+    @staticmethod
+    def buscar_aluno_acesso(prova_id, token, nome_aluno, device_id):
+        return Queries.get_aluno_acesso(prova_id, token, nome_aluno, device_id)
+
+    @staticmethod
+    def bloquear_aluno_acesso(prova_id, token, nome_aluno, device_id, motivo):
+        return Queries.bloquear_aluno_acesso(prova_id, token, nome_aluno, device_id, motivo)
+
+    @staticmethod
+    def finalizar_aluno_acesso(prova_id, token, nome_aluno, device_id):
+        return Queries.finalizar_aluno_acesso(prova_id, token, nome_aluno, device_id)
+
+    @staticmethod
+    def desbloquear_aluno_acesso(prova_id, acesso_id):
+        return Queries.desbloquear_aluno_acesso(prova_id, acesso_id)
+
+    @staticmethod
+    def listar_aluno_acessos_prova(prova_id):
+        return Queries.get_aluno_acessos_prova(prova_id)
+
+    @staticmethod
     def atualizar_prova(prova_id, materia, titulo, questoes):
         Queries.update_prova(prova_id, materia, titulo, json.dumps(questoes, ensure_ascii=False))
 

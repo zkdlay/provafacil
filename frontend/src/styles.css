@@ -181,6 +181,94 @@ label { display: block; }
   background: #f8fafc;
 }
 
+.wizard-card {
+  overflow: hidden;
+}
+
+.wizard-counter {
+  color: var(--primary);
+  font-weight: 800;
+  background: #eef8f6;
+  border: 1px solid #c8ebe5;
+  border-radius: 999px;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.wizard-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 14px 0 18px;
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  background: #fff;
+}
+
+.wizard-step span {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: var(--secondary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.wizard-step.active {
+  border-color: #75c9bd;
+  color: var(--text);
+  background: #f0fdfa;
+}
+
+.wizard-step.active span,
+.wizard-step.done span {
+  background: var(--primary);
+  color: #fff;
+}
+
+.wizard-step.done {
+  color: var(--primary);
+}
+
+.wizard-panel {
+  animation: fadeSlide 180ms ease-out;
+}
+
+.wizard-panel h3 {
+  margin-top: 0;
+}
+
+.wizard-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.question-card {
+  border: 1px solid #e3ebf5;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  background: #fff;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
 .section-title-row {
   display: flex;
   align-items: flex-start;
@@ -355,6 +443,8 @@ label { display: block; }
 @media (max-width: 768px) {
   .page { padding: 18px 12px 28px; }
   .actions { padding: 0; background: transparent; backdrop-filter: none; }
+  .wizard-steps { grid-template-columns: 1fr 1fr; }
+  .wizard-step { padding: 8px; }
 }
 
 .auth-screen {

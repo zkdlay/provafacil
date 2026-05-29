@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import { Route, Routes, useLocation, useParams } from "react-router-dom";
 import { api, criarTurma, excluirTurma, getErrorMessage, listarAlunos, listarTurmas } from "./api";
 
@@ -21,6 +21,21 @@ function toBase64(file) {
 function dataUri(base64) {
   if (!base64) return "";
   return `data:image/png;base64,${base64}`;
+}
+
+function getOrCreateDeviceId() {
+  const storageKey = "provafacil_device_id";
+  try {
+    const existing = window.localStorage.getItem(storageKey);
+    if (existing) return existing;
+    const generated =
+      window.crypto?.randomUUID?.() ||
+      `device_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem(storageKey, generated);
+    return generated;
+  } catch {
+    return `device_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
 }
 
 function toCsv(rows) {
@@ -59,7 +74,7 @@ function AuthProfessor({ onLogin }) {
   async function entrar() {
     if (authAction) return;
     if (!usuario.trim() || !senha.trim()) {
-      setErro("Preencha todos os campos obrigatórios.");
+      setErro("Preencha todos os campos obrigatÃ³rios.");
       return;
     }
     let completed = false;
@@ -84,7 +99,7 @@ function AuthProfessor({ onLogin }) {
   async function registrar() {
     if (authAction) return;
     if (!usuario.trim() || !senha.trim()) {
-      setErro("Preencha todos os campos obrigatórios.");
+      setErro("Preencha todos os campos obrigatÃ³rios.");
       return;
     }
     let completed = false;
@@ -114,7 +129,7 @@ function AuthProfessor({ onLogin }) {
     <main className="auth-screen">
       <section className="auth-side-note">
         <h3>Plataforma de provas online</h3>
-        <p>Crie avaliações, compartilhe links com alunos e acompanhe resultados em tempo real.</p>
+        <p>Crie avaliaÃ§Ãµes, compartilhe links com alunos e acompanhe resultados em tempo real.</p>
       </section>
       <section className="card auth-card">
         <p className="auth-kicker">Prova Facil</p>
@@ -160,27 +175,49 @@ function AuthProfessor({ onLogin }) {
 }
 
 function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
-  const [config, setConfig] = useState({ materia: "", titulo: "", qtd: 5, modo: "multipla_escolha", qtdOp: 4 });
-  const [etapa, setEtapa] = useState(1);
+  const configInicial = { materia: "", titulo: "", qtd: 5, modo: "multipla_escolha", qtdOp: 4 };
+  const [config, setConfig] = useState(configInicial);
+  const [etapaCriacao, setEtapaCriacao] = useState(1);
   const [questoes, setQuestoes] = useState([]);
   const [materias, setMaterias] = useState([]);
-  const [alunosAutorizados, setAlunosAutorizados] = useState([]);
+  const [alunosSelecionados, setAlunosSelecionados] = useState([]);
   const [erro, setErro] = useState("");
-  const [ultimoLink, setUltimoLink] = useState("");
-  const [ultimoExpiraEm, setUltimoExpiraEm] = useState("");
+  const [provaCriadaId, setProvaCriadaId] = useState("");
+  const [linkGerado, setLinkGerado] = useState("");
+  const [linkExpiraEm, setLinkExpiraEm] = useState("");
   const [copiado, setCopiado] = useState(false);
-  const [gerando, setGerando] = useState(false);
-  const [copiandoUltimoLink, setCopiandoUltimoLink] = useState(false);
+  const [loadingGerarLink, setLoadingGerarLink] = useState(false);
+  const [loadingCopiarLink, setLoadingCopiarLink] = useState(false);
+  const gerarLinkLockRef = useRef(false);
+  const copiarLinkLockRef = useRef(false);
 
   useEffect(() => {
     api("/api/config").then((d) => setMaterias(d.materias_padrao || [])).catch(() => {});
   }, []);
 
-  const alunosSelecionadosSet = new Set(alunosAutorizados.map(Number));
+  const alunosSelecionadosSet = new Set(alunosSelecionados.map(Number));
+  const totalQuestoes = Number(config.qtd) || 0;
+  const totalOpcoes = Number(config.qtdOp) || 0;
+
+  function resetarCriacaoProva() {
+    gerarLinkLockRef.current = false;
+    copiarLinkLockRef.current = false;
+    setConfig(configInicial);
+    setEtapaCriacao(1);
+    setQuestoes([]);
+    setAlunosSelecionados([]);
+    setErro("");
+    setProvaCriadaId("");
+    setLinkGerado("");
+    setLinkExpiraEm("");
+    setCopiado(false);
+    setLoadingGerarLink(false);
+    setLoadingCopiarLink(false);
+  }
 
   function toggleAlunoAutorizado(alunoId, marcado) {
     const id = Number(alunoId);
-    setAlunosAutorizados((prev) => {
+    setAlunosSelecionados((prev) => {
       const atual = new Set(prev.map(Number));
       if (marcado) atual.add(id);
       else atual.delete(id);
@@ -190,7 +227,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
 
   function toggleTurmaAutorizada(turma, marcado) {
     const ids = (turma.alunos || []).map((aluno) => Number(aluno.id));
-    setAlunosAutorizados((prev) => {
+    setAlunosSelecionados((prev) => {
       const atual = new Set(prev.map(Number));
       ids.forEach((id) => {
         if (marcado) atual.add(id);
@@ -205,31 +242,63 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     return ids.length > 0 && ids.every((id) => alunosSelecionadosSet.has(id));
   }
 
-  function iniciarEtapa2() {
-    if (!config.titulo.trim() || !config.materia.trim()) {
+  function validarDadosBasicos() {
+    if (!config.materia.trim() || !config.titulo.trim()) {
       setErro("Preencha materia e titulo.");
-      return;
+      return false;
     }
-    if (!alunosAutorizados.length) {
-      setErro("Selecione pelo menos um aluno autorizado para esta prova.");
-      return;
+    if (!Number.isInteger(totalQuestoes) || totalQuestoes < 1 || totalQuestoes > 50) {
+      setErro("Informe uma quantidade de questoes entre 1 e 50.");
+      return false;
+    }
+    if (config.modo !== "texto" && (!Number.isInteger(totalOpcoes) || totalOpcoes < 2 || totalOpcoes > 5)) {
+      setErro("Informe uma quantidade de alternativas entre 2 e 5.");
+      return false;
     }
     setErro("");
-    const nova = Array.from({ length: Number(config.qtd) }).map(() => ({
-      tipo: config.modo === "texto" ? "texto" : "multipla_escolha",
-      enunciado: "",
-      imagem: null,
-      opcoes: Array.from({ length: Number(config.qtdOp) }).map(() => ""),
-      imagens_opcoes: Array.from({ length: Number(config.qtdOp) }).map(() => null),
-      gabarito: "A",
-      gabarito_texto: ""
-    }));
-    setQuestoes(nova);
-    setEtapa(2);
+    return true;
+  }
+
+  function prepararQuestaoExistente(q = {}) {
+    const tipoBase = config.modo === "texto" ? "texto" : "multipla_escolha";
+    const tipo = config.modo === "misto" ? q.tipo || "multipla_escolha" : tipoBase;
+    const opcoes = Array.from({ length: totalOpcoes }).map((_, i) => q.opcoes?.[i] || "");
+    const imagensOpcoes = Array.from({ length: totalOpcoes }).map((_, i) => q.imagens_opcoes?.[i] || null);
+    return {
+      tipo,
+      enunciado: q.enunciado || "",
+      imagem: q.imagem || null,
+      opcoes: tipo === "texto" ? [] : opcoes,
+      imagens_opcoes: tipo === "texto" ? [] : imagensOpcoes,
+      gabarito: LETRAS.slice(0, totalOpcoes).includes(q.gabarito) ? q.gabarito : "A",
+      gabarito_texto: q.gabarito_texto || "",
+    };
+  }
+
+  function irParaQuestoes() {
+    if (!validarDadosBasicos()) return;
+    setQuestoes((prev) =>
+      Array.from({ length: totalQuestoes }).map((_, i) => prepararQuestaoExistente(prev[i]))
+    );
+    setEtapaCriacao(2);
   }
 
   function atualizarQuestao(idx, patch) {
     setQuestoes((prev) => prev.map((q, i) => (i === idx ? { ...q, ...patch } : q)));
+  }
+
+  function atualizarTipoQuestao(idx, tipo) {
+    setQuestoes((prev) =>
+      prev.map((q, i) => {
+        if (i !== idx) return q;
+        if (tipo === "texto") {
+          return { ...q, tipo, opcoes: [], imagens_opcoes: [] };
+        }
+        const opcoes = Array.from({ length: totalOpcoes }).map((_, j) => q.opcoes?.[j] || "");
+        const imagensOpcoes = Array.from({ length: totalOpcoes }).map((_, j) => q.imagens_opcoes?.[j] || null);
+        return { ...q, tipo, opcoes, imagens_opcoes, gabarito: q.gabarito || "A" };
+      })
+    );
   }
 
   function atualizarOpcao(qIdx, opIdx, val) {
@@ -254,40 +323,80 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     );
   }
 
-  async function gerar() {
-    if (gerando) return;
-    if (!config.titulo.trim() || !config.materia.trim() || !questoes.length) {
-      setErro("Preencha todos os campos obrigatórios.");
-      return;
+  function validarQuestoes() {
+    if (!questoes.length) {
+      setErro("Preencha as questoes antes de continuar.");
+      return false;
     }
-    if (!alunosAutorizados.length) {
+    for (let i = 0; i < questoes.length; i += 1) {
+      const q = questoes[i];
+      if (!q.enunciado.trim()) {
+        setErro(`Preencha o enunciado da questao ${i + 1}.`);
+        return false;
+      }
+      if (q.tipo === "texto") {
+        if (!String(q.gabarito_texto || "").trim()) {
+          setErro(`Preencha o gabarito textual da questao ${i + 1}.`);
+          return false;
+        }
+      } else if ((q.opcoes || []).slice(0, totalOpcoes).some((op) => !String(op || "").trim())) {
+        setErro(`Preencha todas as alternativas da questao ${i + 1}.`);
+        return false;
+      }
+    }
+    setErro("");
+    return true;
+  }
+
+  function irParaAlunos() {
+    if (!validarQuestoes()) return;
+    setEtapaCriacao(3);
+  }
+
+  function irParaResumo() {
+    if (!alunosSelecionados.length) {
       setErro("Selecione pelo menos um aluno autorizado para esta prova.");
       return;
     }
     setErro("");
-    setGerando(true);
-    try {
-      const payloadQuestoes = questoes.map((q) => {
-        if (q.tipo === "texto") {
-          return {
-            tipo: "texto",
-            enunciado: q.enunciado,
-            imagem: q.imagem,
-            opcoes: [],
-            imagens_opcoes: [],
-            gabarito_texto: q.gabarito_texto || ""
-          };
-        }
+    setEtapaCriacao(4);
+  }
+
+  function montarQuestoesPayload() {
+    return questoes.map((q) => {
+      if (q.tipo === "texto") {
         return {
-          tipo: "multipla_escolha",
+          tipo: "texto",
           enunciado: q.enunciado,
           imagem: q.imagem,
-          opcoes: q.opcoes,
-          imagens_opcoes: q.imagens_opcoes,
-          gabarito: q.gabarito
+          opcoes: [],
+          imagens_opcoes: [],
+          gabarito_texto: q.gabarito_texto || "",
         };
-      });
+      }
+      return {
+        tipo: "multipla_escolha",
+        enunciado: q.enunciado,
+        imagem: q.imagem,
+        opcoes: q.opcoes,
+        imagens_opcoes: q.imagens_opcoes,
+        gabarito: q.gabarito,
+      };
+    });
+  }
 
+  async function gerarLink() {
+    if (gerarLinkLockRef.current || provaCriadaId) return;
+    if (!validarDadosBasicos() || !validarQuestoes()) return;
+    if (!alunosSelecionados.length) {
+      setErro("Selecione pelo menos um aluno autorizado para esta prova.");
+      return;
+    }
+
+    gerarLinkLockRef.current = true;
+    setErro("");
+    setLoadingGerarLink(true);
+    try {
       const created = await api(
         "/api/provas",
         {
@@ -295,31 +404,29 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
           body: JSON.stringify({
             materia: config.materia,
             titulo: config.titulo,
-            questoes: payloadQuestoes,
-            alunos_autorizados: alunosAutorizados,
-          })
+            questoes: montarQuestoesPayload(),
+            alunos_autorizados: alunosSelecionados,
+          }),
         },
         token
       );
-      const link = `${window.location.origin}/aluno/${created.id}?token=${created.token}`;
-      setUltimoLink(link);
-      setUltimoExpiraEm(created.expira_em || "");
+      setProvaCriadaId(created.id);
+      setLinkGerado(`${window.location.origin}/aluno/${created.id}?token=${created.token}`);
+      setLinkExpiraEm(created.expira_em || "");
       setCopiado(false);
-      setEtapa(1);
-      setConfig({ materia: "", titulo: "", qtd: 5, modo: "multipla_escolha", qtdOp: 4 });
-      setQuestoes([]);
-      setAlunosAutorizados([]);
       await onCreated();
     } catch (e) {
+      gerarLinkLockRef.current = false;
       setErro(getErrorMessage(e));
     } finally {
-      setGerando(false);
+      setLoadingGerarLink(false);
     }
   }
 
   async function copiarLink(link) {
-    if (copiandoUltimoLink) return;
-    setCopiandoUltimoLink(true);
+    if (copiarLinkLockRef.current || !link) return;
+    copiarLinkLockRef.current = true;
+    setLoadingCopiarLink(true);
     try {
       await navigator.clipboard.writeText(link);
       setCopiado(true);
@@ -327,15 +434,38 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     } catch {
       setErro("Nao foi possivel copiar o link.");
     } finally {
-      setCopiandoUltimoLink(false);
+      copiarLinkLockRef.current = false;
+      setLoadingCopiarLink(false);
     }
   }
 
+  const etapas = ["Dados", "Questoes", "Alunos", "Link"];
+
   return (
-    <section className="card">
-      <h2>Criar Prova</h2>
-      {etapa === 1 ? (
-        <>
+    <section className="card wizard-card">
+      <div className="section-title-row">
+        <div>
+          <h2>Criar Prova</h2>
+          <p>Monte a avaliacao em etapas para evitar salvar algo incompleto.</p>
+        </div>
+        <span className="wizard-counter">Etapa {etapaCriacao} de 4</span>
+      </div>
+
+      <div className="wizard-steps">
+        {etapas.map((label, i) => {
+          const numero = i + 1;
+          return (
+            <div key={label} className={`wizard-step ${etapaCriacao === numero ? "active" : ""} ${etapaCriacao > numero ? "done" : ""}`}>
+              <span>{numero}</span>
+              <strong>{label}</strong>
+            </div>
+          );
+        })}
+      </div>
+
+      {etapaCriacao === 1 ? (
+        <div className="wizard-panel">
+          <h3>Dados da prova</h3>
           <input list="materias" placeholder="Materia" value={config.materia} onChange={(e) => setConfig((c) => ({ ...c, materia: e.target.value }))} />
           <datalist id="materias">{materias.map((m) => <option key={m} value={m} />)}</datalist>
           <input placeholder="Titulo" value={config.titulo} onChange={(e) => setConfig((c) => ({ ...c, titulo: e.target.value }))} />
@@ -352,8 +482,76 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
               <input type="number" min="2" max="5" value={config.qtdOp} onChange={(e) => setConfig((c) => ({ ...c, qtdOp: e.target.value }))} />
             </>
           ) : null}
+          <div className="actions wizard-actions">
+            <button onClick={irParaQuestoes}>Proximo</button>
+          </div>
+        </div>
+      ) : null}
+
+      {etapaCriacao === 2 ? (
+        <div className="wizard-panel">
+          <h3>Questoes</h3>
+          {questoes.map((q, i) => (
+            <article key={i} className="list-item question-card">
+              <strong>Questao {i + 1}</strong>
+              <textarea rows={2} placeholder="Enunciado" value={q.enunciado} onChange={(e) => atualizarQuestao(i, { enunciado: e.target.value })} />
+              <label>Imagem da questao (opcional)</label>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/jpg"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const base64 = await toBase64(file);
+                  atualizarQuestao(i, { imagem: base64 });
+                }}
+              />
+              {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
+              {config.modo === "misto" ? (
+                <select value={q.tipo} onChange={(e) => atualizarTipoQuestao(i, e.target.value)}>
+                  <option value="multipla_escolha">Multipla escolha</option>
+                  <option value="texto">Texto</option>
+                </select>
+              ) : null}
+              {q.tipo === "texto" ? (
+                <input placeholder="Gabarito textual" value={q.gabarito_texto || ""} onChange={(e) => atualizarQuestao(i, { gabarito_texto: e.target.value, opcoes: [], imagens_opcoes: [] })} />
+              ) : (
+                <>
+                  {q.opcoes.map((op, j) => (
+                    <div key={j} className="opcao-box">
+                      <input placeholder={`Opcao ${LETRAS[j]}`} value={op} onChange={(e) => atualizarOpcao(i, j, e.target.value)} />
+                      <label>Imagem opcao {LETRAS[j]} (opcional)</label>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const base64 = await toBase64(file);
+                          atualizarImagemOpcao(i, j, base64);
+                        }}
+                      />
+                      {q.imagens_opcoes?.[j] ? <img className="preview" src={dataUri(q.imagens_opcoes[j])} alt={`Opcao ${LETRAS[j]}`} /> : null}
+                    </div>
+                  ))}
+                  <select value={q.gabarito} onChange={(e) => atualizarQuestao(i, { gabarito: e.target.value })}>
+                    {LETRAS.slice(0, totalOpcoes).map((l) => <option key={l} value={l}>{l}</option>)}
+                  </select>
+                </>
+              )}
+            </article>
+          ))}
+          <div className="actions wizard-actions">
+            <button className="secondary" onClick={() => setEtapaCriacao(1)}>Voltar</button>
+            <button onClick={irParaAlunos}>Proximo</button>
+          </div>
+        </div>
+      ) : null}
+
+      {etapaCriacao === 3 ? (
+        <div className="wizard-panel">
+          <h3>Alunos autorizados</h3>
           <div className="student-picker">
-            <h3>Quais alunos irão fazer essa prova?</h3>
             {carregandoTurmas ? <p>Carregando turmas...</p> : null}
             {!carregandoTurmas && !(turmas || []).length ? (
               <p className="empty-note">Cadastre uma turma na aba Alunos antes de criar uma prova.</p>
@@ -382,88 +580,54 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
                 </div>
               </div>
             ))}
-            <p className="selection-count">{alunosAutorizados.length} aluno(s) selecionado(s).</p>
+            <p className="selection-count">{alunosSelecionados.length} aluno(s) selecionado(s).</p>
           </div>
-          <button onClick={iniciarEtapa2}>Proximo</button>
-          {ultimoLink ? (
+          <div className="actions wizard-actions">
+            <button className="secondary" onClick={() => setEtapaCriacao(2)}>Voltar</button>
+            <button onClick={irParaResumo}>Proximo</button>
+          </div>
+        </div>
+      ) : null}
+
+      {etapaCriacao === 4 ? (
+        <div className="wizard-panel">
+          <h3>Gerar link</h3>
+          <div className="summary-grid">
+            <div className="stat-card"><strong>Titulo</strong><span>{config.titulo || "-"}</span></div>
+            <div className="stat-card"><strong>Materia</strong><span>{config.materia || "-"}</span></div>
+            <div className="stat-card"><strong>Questoes</strong><span>{questoes.length}</span></div>
+            <div className="stat-card"><strong>Alunos autorizados</strong><span>{alunosSelecionados.length}</span></div>
+          </div>
+          {!linkGerado ? (
+            <div className="actions wizard-actions">
+              <button className="secondary" onClick={() => setEtapaCriacao(3)} disabled={loadingGerarLink}>Voltar</button>
+              <button onClick={gerarLink} disabled={loadingGerarLink || Boolean(provaCriadaId)}>
+                {loadingGerarLink ? "Gerando..." : "Gerar link"}
+              </button>
+            </div>
+          ) : (
             <div className="link-box">
               <p>Link da prova criada:</p>
-              <input readOnly value={ultimoLink} />
-              {ultimoExpiraEm ? (
-                <p>Link válido por {LINK_EXPIRATION_LABEL}, até {new Date(ultimoExpiraEm).toLocaleString()}.</p>
-              ) : null}
-              <button onClick={() => copiarLink(ultimoLink)} disabled={copiandoUltimoLink}>
-                {copiandoUltimoLink ? "Copiando..." : "Copiar link"}
-              </button>
-              {copiado ? <span className="ok">Copiado</span> : null}
+              <input readOnly value={linkGerado} />
+              <p>Link valido por {LINK_EXPIRATION_LABEL}.</p>
+              {linkExpiraEm ? <p>Expira em {new Date(linkExpiraEm).toLocaleString()}.</p> : null}
+              <div className="actions">
+                <button onClick={() => copiarLink(linkGerado)} disabled={loadingCopiarLink}>
+                  {loadingCopiarLink ? "Copiando..." : copiado ? "Copiado" : "Copiar link"}
+                </button>
+                <button className="secondary" onClick={resetarCriacaoProva}>
+                  OK / Concluir
+                </button>
+              </div>
             </div>
-          ) : null}
-        </>
-      ) : (
-        <>
-          {questoes.map((q, i) => (
-            <article key={i} className="list-item">
-              <strong>Questao {i + 1}</strong>
-              <textarea rows={2} placeholder="Enunciado" value={q.enunciado} onChange={(e) => atualizarQuestao(i, { enunciado: e.target.value })} />
-              <label>Imagem da questao (opcional)</label>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/jpg"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const base64 = await toBase64(file);
-                  atualizarQuestao(i, { imagem: base64 });
-                }}
-              />
-              {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
-              {config.modo === "misto" ? (
-                <select value={q.tipo} onChange={(e) => atualizarQuestao(i, { tipo: e.target.value })}>
-                  <option value="multipla_escolha">Multipla escolha</option>
-                  <option value="texto">Texto</option>
-                </select>
-              ) : null}
-              {q.tipo === "texto" ? (
-                <input placeholder="Gabarito textual" value={q.gabarito_texto || ""} onChange={(e) => atualizarQuestao(i, { gabarito_texto: e.target.value, opcoes: [], imagens_opcoes: [] })} />
-              ) : (
-                <>
-                  {q.opcoes.map((op, j) => (
-                    <div key={j} className="opcao-box">
-                      <input placeholder={`Opcao ${LETRAS[j]}`} value={op} onChange={(e) => atualizarOpcao(i, j, e.target.value)} />
-                      <label>Imagem opcao {LETRAS[j]} (opcional)</label>
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/jpg"
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const base64 = await toBase64(file);
-                          atualizarImagemOpcao(i, j, base64);
-                        }}
-                      />
-                      {q.imagens_opcoes?.[j] ? <img className="preview" src={dataUri(q.imagens_opcoes[j])} alt={`Opcao ${LETRAS[j]}`} /> : null}
-                    </div>
-                  ))}
-                  <select value={q.gabarito} onChange={(e) => atualizarQuestao(i, { gabarito: e.target.value })}>
-                    {LETRAS.slice(0, Number(config.qtdOp)).map((l) => <option key={l} value={l}>{l}</option>)}
-                  </select>
-                </>
-              )}
-            </article>
-          ))}
-          <div className="actions">
-            <button onClick={gerar} disabled={gerando}>
-              {gerando ? "Salvando..." : "Salvar prova"}
-            </button>
-            <button className="secondary" onClick={() => setEtapa(1)} disabled={gerando}>Voltar</button>
-          </div>
-        </>
-      )}
+          )}
+        </div>
+      ) : null}
+
       {erro ? <p className="erro">{erro}</p> : null}
     </section>
   );
 }
-
 function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nomeTurma, setNomeTurma] = useState("");
@@ -655,6 +819,7 @@ function DashboardProfessor() {
   const [renovandoLinkId, setRenovandoLinkId] = useState("");
   const [baixandoCsv, setBaixandoCsv] = useState(false);
   const [carregandoTurmas, setCarregandoTurmas] = useState(false);
+  const [desbloqueandoAcessos, setDesbloqueandoAcessos] = useState([]);
   const deleteLockRef = useRef("");
   const resultadosRequestRef = useRef(0);
   const monitoramentoRequestRef = useRef(0);
@@ -824,6 +989,35 @@ function DashboardProfessor() {
     }
   }
 
+  async function desbloquearAluno(acessoId) {
+    if (!acessoId || desbloqueandoAcessos.includes(acessoId)) return;
+    setErro("");
+    setDesbloqueandoAcessos((prev) => [...prev, acessoId]);
+    try {
+      const data = await api(
+        `/api/provas/${provaSelecionada}/aluno-acessos/${acessoId}/desbloquear`,
+        { method: "POST" },
+        auth.token
+      );
+      setMonitor((prev) =>
+        prev.map((m) =>
+          m.aluno_acesso_id === acessoId
+            ? {
+                ...m,
+                status: "ativo",
+                ultimo_evento: "Aluno desbloqueado",
+                detalhe_ultimo: data?.acesso?.motivo_bloqueio || m.detalhe_ultimo,
+              }
+            : m
+        )
+      );
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setDesbloqueandoAcessos((prev) => prev.filter((id) => id !== acessoId));
+    }
+  }
+
   function baixarCsvResultados() {
     if (baixandoCsv || !resultados.length) return;
     setBaixandoCsv(true);
@@ -889,7 +1083,7 @@ function DashboardProfessor() {
                 <strong>{p.titulo}</strong>
                 <span>{p.materia} - {p.quantidade_questoes} questoes</span>
                 {link ? <input readOnly value={link} /> : <span>Nenhum link ativo. Gere um novo link para enviar aos alunos.</span>}
-                {p.expira_em ? <span>Válido até {new Date(p.expira_em).toLocaleString()}.</span> : null}
+                {p.expira_em ? <span>VÃ¡lido atÃ© {new Date(p.expira_em).toLocaleString()}.</span> : null}
                 <div className="actions">
                   <button onClick={() => renovarLink(p.id)} disabled={Boolean(renovandoLinkId)}>
                     {renovandoLinkId === p.id ? "Renovando..." : "Renovar link"}
@@ -971,21 +1165,39 @@ function DashboardProfessor() {
                 <tr>
                   <th>Aluno</th>
                   <th>Status</th>
+                  <th>Dispositivo</th>
                   <th>Saidas</th>
                   <th>Ultimo evento</th>
                   <th>Detalhe</th>
                   <th>Ultima atividade</th>
+                  <th>AÃ§Ãµes</th>
                 </tr>
               </thead>
               <tbody>
                 {monitor.map((m, i) => (
-                  <tr key={i} className={m.status === "fraude" ? "fraud-row" : ""}>
+                  <tr key={i} className={["fraude", "bloqueado"].includes(m.status) ? "fraud-row" : ""}>
                     <td>{m.nome}</td>
                     <td>{m.status}</td>
+                    <td>{m.device_id || "-"}</td>
                     <td>{m.vezes_saiu}</td>
                     <td>{m.ultimo_evento}</td>
                     <td>{m.detalhe_ultimo || "-"}</td>
                     <td>{m.data_hora_ultima}</td>
+                    <td>
+                      {m.status === "bloqueado" && m.aluno_acesso_id ? (
+                        <button
+                          className="secondary"
+                          onClick={() => desbloquearAluno(m.aluno_acesso_id)}
+                          disabled={desbloqueandoAcessos.includes(m.aluno_acesso_id)}
+                        >
+                          {desbloqueandoAcessos.includes(m.aluno_acesso_id)
+                            ? "Desbloqueando..."
+                            : "Desbloquear aluno"}
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1001,6 +1213,7 @@ function AlunoPage() {
   const { provaId } = useParams();
   const location = useLocation();
   const token = new URLSearchParams(location.search).get("token") || "";
+  const [deviceId] = useState(() => getOrCreateDeviceId());
   const [prova, setProva] = useState(null);
   const [nome, setNome] = useState("");
   const [numero, setNumero] = useState("");
@@ -1016,14 +1229,16 @@ function AlunoPage() {
 
   useEffect(() => {
     if (!token) {
-      setBloqueioMensagem("Link inválido. Solicite um novo link ao professor.");
+      setBloqueioMensagem("Link invÃ¡lido. Solicite um novo link ao professor.");
       return;
     }
     setBloqueioMensagem("");
-    api(`/api/aluno/provas/${provaId}?token=${encodeURIComponent(token)}`)
+    api(
+      `/api/aluno/provas/${provaId}?token=${encodeURIComponent(token)}&device_id=${encodeURIComponent(deviceId)}`
+    )
       .then(setProva)
       .catch((e) => setBloqueioMensagem(getErrorMessage(e)));
-  }, [provaId, token]);
+  }, [provaId, token, deviceId]);
 
   useEffect(() => {
     if (!logado || !nome || resultado) return;
@@ -1034,13 +1249,13 @@ function AlunoPage() {
     const bloquearAcesso = async (evento, detalhe) => {
       if (securityEventLockRef.current) return;
       securityEventLockRef.current = true;
-      setBloqueioMensagem("A prova foi bloqueada por saída da aba, minimização ou redimensionamento suspeito.");
+      setBloqueioMensagem("A prova foi bloqueada por saÃ­da da aba, minimizaÃ§Ã£o ou redimensionamento suspeito.");
       setBloqueado(true);
       setLogado(false);
       try {
         await api(`/api/aluno/provas/${provaId}/eventos`, {
           method: "POST",
-          body: JSON.stringify({ nome_aluno: nome, evento, detalhe, token })
+          body: JSON.stringify({ nome_aluno: nome, evento, detalhe, token, device_id: deviceId })
         });
       } catch {
         // noop
@@ -1108,7 +1323,7 @@ function AlunoPage() {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("resize", onResize);
     };
-  }, [logado, nome, provaId, resultado, token]);
+  }, [logado, nome, provaId, resultado, token, deviceId]);
 
   useEffect(() => {
     if (!logado || !nome || resultado || bloqueioMensagem) return;
@@ -1117,7 +1332,7 @@ function AlunoPage() {
       target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
 
     const registrarTentativaBloqueada = (detalhe) => {
-      setErro("Ação bloqueada durante a prova.");
+      setErro("AÃ§Ã£o bloqueada durante a prova.");
       api(`/api/aluno/provas/${provaId}/eventos`, {
         method: "POST",
         body: JSON.stringify({
@@ -1125,6 +1340,7 @@ function AlunoPage() {
           evento: "tentativa_bloqueada",
           detalhe,
           token,
+          device_id: deviceId,
         }),
       }).catch(() => {});
     };
@@ -1170,12 +1386,12 @@ function AlunoPage() {
       document.removeEventListener("selectstart", onSelectStart, true);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [logado, nome, resultado, bloqueioMensagem, provaId, token]);
+  }, [logado, nome, resultado, bloqueioMensagem, provaId, token, deviceId]);
 
   async function entrar() {
     if (acaoAluno) return;
     if (!nome.trim() || !numero.trim()) {
-      setErro("Preencha todos os campos obrigatórios.");
+      setErro("Preencha todos os campos obrigatÃ³rios.");
       return;
     }
     setErro("");
@@ -1183,7 +1399,7 @@ function AlunoPage() {
     try {
       const data = await api(`/api/aluno/provas/${provaId}/login`, {
         method: "POST",
-        body: JSON.stringify({ nome_aluno: nome, numero, token })
+        body: JSON.stringify({ nome_aluno: nome, numero, token, device_id: deviceId })
       });
       if (data.ja_entregue) {
         setResultado({ nota: data.nota, acertos: data.acertos, total: data.total, entregue: true });
@@ -1201,7 +1417,7 @@ function AlunoPage() {
   async function enviar() {
     if (enviarLockRef.current) return;
     if (!nome.trim()) {
-      setErro("Preencha todos os campos obrigatórios.");
+      setErro("Preencha todos os campos obrigatÃ³rios.");
       return;
     }
     enviarLockRef.current = true;
@@ -1210,7 +1426,7 @@ function AlunoPage() {
     try {
       const data = await api(`/api/aluno/provas/${provaId}/responder`, {
         method: "POST",
-        body: JSON.stringify({ nome_aluno: nome, respostas, token })
+        body: JSON.stringify({ nome_aluno: nome, respostas, token, device_id: deviceId })
       });
       setResultado({ ...data, entregue: true });
       setLogado(false);
@@ -1226,7 +1442,7 @@ function AlunoPage() {
     return (
       <main className="page">
         <section className="card">
-          <h2>Acesso indisponível</h2>
+          <h2>Acesso indisponÃ­vel</h2>
           <p>{bloqueioMensagem}</p>
         </section>
       </main>
@@ -1317,3 +1533,4 @@ export default function App() {
     </Routes>
   );
 }
+

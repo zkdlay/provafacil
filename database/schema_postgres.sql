@@ -69,6 +69,21 @@ CREATE TABLE IF NOT EXISTS acessos_prova (
 
 ALTER TABLE acessos_prova ADD COLUMN IF NOT EXISTS expira_em TIMESTAMP;
 
+CREATE TABLE IF NOT EXISTS aluno_acessos (
+    id SERIAL PRIMARY KEY,
+    prova_id TEXT NOT NULL REFERENCES provas(id) ON DELETE CASCADE,
+    token TEXT NOT NULL,
+    nome_aluno TEXT NOT NULL,
+    nome_normalizado TEXT,
+    device_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ativo',
+    motivo_bloqueio TEXT,
+    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    bloqueado_em TIMESTAMP NULL,
+    ultimo_evento_em TIMESTAMP NULL,
+    UNIQUE(prova_id, token, nome_normalizado, device_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_provas_usuario_id ON provas(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_turmas_usuario_id ON turmas(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_alunos_turma_id ON alunos(turma_id);
@@ -78,3 +93,6 @@ CREATE INDEX IF NOT EXISTS idx_prova_alunos_aluno_id ON prova_alunos_autorizados
 CREATE INDEX IF NOT EXISTS idx_respostas_prova_id ON respostas(prova_id);
 CREATE INDEX IF NOT EXISTS idx_eventos_prova_id ON eventos(prova_id);
 CREATE INDEX IF NOT EXISTS idx_acessos_prova_id ON acessos_prova(prova_id);
+CREATE INDEX IF NOT EXISTS idx_aluno_acessos_prova_id ON aluno_acessos(prova_id);
+CREATE INDEX IF NOT EXISTS idx_aluno_acessos_status ON aluno_acessos(status);
+CREATE INDEX IF NOT EXISTS idx_aluno_acessos_lookup ON aluno_acessos(prova_id, token, nome_normalizado, device_id);

@@ -124,6 +124,7 @@ class Queries:
         try:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM prova_alunos_autorizados WHERE prova_id=%s", (prova_id,))
+                cur.execute("DELETE FROM aluno_acessos WHERE prova_id=%s", (prova_id,))
                 cur.execute("DELETE FROM eventos WHERE prova_id=%s", (prova_id,))
                 cur.execute("DELETE FROM acessos_prova WHERE prova_id=%s", (prova_id,))
                 cur.execute("DELETE FROM respostas WHERE prova_id=%s", (prova_id,))
@@ -361,6 +362,181 @@ class Queries:
                     (token,),
                 )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def criar_ou_atualizar_aluno_acesso(prova_id, token, nome_aluno, device_id):
+        nome_normalizado = normalizar_nome(nome_aluno)
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO aluno_acessos (
+                        prova_id,
+                        token,
+                        nome_aluno,
+                        nome_normalizado,
+                        device_id,
+                        status,
+                        ultimo_evento_em
+                    )
+                    VALUES (%s, %s, %s, %s, %s, 'ativo', %s)
+                    ON CONFLICT (prova_id, token, nome_normalizado, device_id)
+                    DO UPDATE SET
+                        nome_aluno = EXCLUDED.nome_aluno,
+                        ultimo_evento_em = EXCLUDED.ultimo_evento_em
+                    RETURNING *
+                    """,
+                    (prova_id, token, nome_aluno, nome_normalizado, device_id, datetime.utcnow()),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_aluno_acesso(prova_id, token, nome_aluno, device_id):
+        nome_normalizado = normalizar_nome(nome_aluno)
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM aluno_acessos
+                    WHERE prova_id=%s
+                      AND token=%s
+                      AND nome_normalizado=%s
+                      AND device_id=%s
+                    LIMIT 1
+                    """,
+                    (prova_id, token, nome_normalizado, device_id),
+                )
+                row = cur.fetchone()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def bloquear_aluno_acesso(prova_id, token, nome_aluno, device_id, motivo):
+        if not nome_aluno or not device_id:
+            return False
+
+        nome_normalizado = normalizar_nome(nome_aluno)
+        agora = datetime.utcnow()
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE aluno_acessos
+                    SET status='bloqueado',
+                        motivo_bloqueio=%s,
+                        bloqueado_em=COALESCE(bloqueado_em, %s),
+                        ultimo_evento_em=%s
+                    WHERE prova_id=%s
+                      AND token=%s
+                      AND nome_normalizado=%s
+                      AND device_id=%s
+                    RETURNING *
+                    """,
+                    (motivo, agora, agora, prova_id, token, nome_normalizado, device_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def finalizar_aluno_acesso(prova_id, token, nome_aluno, device_id):
+        if not nome_aluno or not device_id:
+            return False
+
+        nome_normalizado = normalizar_nome(nome_aluno)
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE aluno_acessos
+                    SET status='finalizado',
+                        ultimo_evento_em=%s
+                    WHERE prova_id=%s
+                      AND token=%s
+                      AND nome_normalizado=%s
+                      AND device_id=%s
+                      AND status <> 'bloqueado'
+                    RETURNING *
+                    """,
+                    (datetime.utcnow(), prova_id, token, nome_normalizado, device_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def desbloquear_aluno_acesso(prova_id, acesso_id):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE aluno_acessos
+                    SET status='ativo',
+                        ultimo_evento_em=%s
+                    WHERE id=%s
+                      AND prova_id=%s
+                      AND status='bloqueado'
+                    RETURNING *
+                    """,
+                    (datetime.utcnow(), acesso_id, prova_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_aluno_acessos_prova(prova_id):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM aluno_acessos
+                    WHERE prova_id=%s
+                    ORDER BY ultimo_evento_em DESC NULLS LAST, criado_em DESC
+                    """,
+                    (prova_id,),
+                )
+                rows = cur.fetchall()
+            return [dict(r) for r in rows]
         except Exception:
             conn.rollback()
             raise

@@ -175,7 +175,15 @@ def filter_rows_by_existing_provas(table_name, rows, valid_prova_ids):
 
 
 def reset_sequences(pg_conn):
-    sequence_tables = ["usuarios", "turmas", "alunos", "prova_alunos_autorizados", "respostas", "eventos"]
+    sequence_tables = [
+        "usuarios",
+        "turmas",
+        "alunos",
+        "prova_alunos_autorizados",
+        "aluno_acessos",
+        "respostas",
+        "eventos",
+    ]
     with pg_conn.cursor() as cur:
         for table_name in sequence_tables:
             cur.execute(
