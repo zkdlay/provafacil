@@ -1028,10 +1028,13 @@ function AlunoPage() {
   useEffect(() => {
     if (!logado || !nome || resultado) return;
 
+    const isEditableElement = (target) =>
+      target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+
     const bloquearAcesso = async (evento, detalhe) => {
       if (securityEventLockRef.current) return;
       securityEventLockRef.current = true;
-      setBloqueioMensagem("A prova foi bloqueada por atividade suspeita. Informe o professor.");
+      setBloqueioMensagem("A prova foi bloqueada por saída da aba, minimização ou redimensionamento suspeito.");
       setBloqueado(true);
       setLogado(false);
       try {
@@ -1047,35 +1050,61 @@ function AlunoPage() {
     const initialWidth = window.innerWidth;
     const initialHeight = window.innerHeight;
     const startedAt = Date.now();
+    let blurTimerId = null;
+    let visibilityTimerId = null;
+    let resizeTimerId = null;
+
+    const clearSecurityTimers = () => {
+      if (blurTimerId) window.clearTimeout(blurTimerId);
+      if (visibilityTimerId) window.clearTimeout(visibilityTimerId);
+      if (resizeTimerId) window.clearTimeout(resizeTimerId);
+    };
 
     const onBlur = () => {
-      bloquearAcesso("blur", "perda_de_foco_da_janela");
+      if (blurTimerId) window.clearTimeout(blurTimerId);
+      blurTimerId = window.setTimeout(() => {
+        const paginaOculta = document.visibilityState === "hidden";
+        const janelaSemFoco = document.hasFocus && !document.hasFocus();
+        if (paginaOculta || janelaSemFoco) {
+          bloquearAcesso("blur", "perda_de_foco_da_janela");
+        }
+      }, 400);
     };
 
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        bloquearAcesso("visibility_hidden", "aba_oculta_bloqueio");
+        if (visibilityTimerId) window.clearTimeout(visibilityTimerId);
+        visibilityTimerId = window.setTimeout(() => {
+          if (document.visibilityState === "hidden") {
+            bloquearAcesso("visibility_hidden", "aba_oculta_bloqueio");
+          }
+        }, 400);
       }
     };
 
     const onResize = () => {
       if (Date.now() - startedAt < 1000) return;
-      if (initialWidth < 900 && initialHeight < 650) return;
-      const widthDrop = window.innerWidth < initialWidth * 0.65;
-      const heightDrop = window.innerHeight < initialHeight * 0.65 || window.innerHeight < 420;
-      if (widthDrop || heightDrop) {
-        bloquearAcesso(
-          "resize_suspeito",
-          `janela_redimensionada_${initialWidth}x${initialHeight}_para_${window.innerWidth}x${window.innerHeight}`
-        );
-      }
+      if (isEditableElement(document.activeElement)) return;
+      if (resizeTimerId) window.clearTimeout(resizeTimerId);
+      resizeTimerId = window.setTimeout(() => {
+        if (isEditableElement(document.activeElement)) return;
+        const widthDrop = window.innerWidth < initialWidth * 0.65;
+        const heightDrop = window.innerHeight < initialHeight * 0.65;
+        if (widthDrop || heightDrop) {
+          bloquearAcesso(
+            "resize_suspeito",
+            `janela_redimensionada_${initialWidth}x${initialHeight}_para_${window.innerWidth}x${window.innerHeight}`
+          );
+        }
+      }, 450);
     };
 
-    window.addEventListener("blur", onBlur, true);
+    window.addEventListener("blur", onBlur);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("resize", onResize);
     return () => {
-      window.removeEventListener("blur", onBlur, true);
+      clearSecurityTimers();
+      window.removeEventListener("blur", onBlur);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("resize", onResize);
     };
