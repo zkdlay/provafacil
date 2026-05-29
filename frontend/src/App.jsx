@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Route, Routes, useParams } from "react-router-dom";
-import { api, getErrorMessage } from "./api";
+import { Route, Routes, useLocation, useParams } from "react-router-dom";
+import { api, criarTurma, excluirTurma, getErrorMessage, listarAlunos, listarTurmas } from "./api";
 
 const LETRAS = ["A", "B", "C", "D", "E"];
+const LINK_EXPIRATION_LABEL = "1 hora e 10 minutos";
 
 function toBase64(file) {
   return new Promise((resolve, reject) => {
@@ -158,13 +159,15 @@ function AuthProfessor({ onLogin }) {
   );
 }
 
-function CriacaoProva({ token, onCreated }) {
+function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
   const [config, setConfig] = useState({ materia: "", titulo: "", qtd: 5, modo: "multipla_escolha", qtdOp: 4 });
   const [etapa, setEtapa] = useState(1);
   const [questoes, setQuestoes] = useState([]);
   const [materias, setMaterias] = useState([]);
+  const [alunosAutorizados, setAlunosAutorizados] = useState([]);
   const [erro, setErro] = useState("");
   const [ultimoLink, setUltimoLink] = useState("");
+  const [ultimoExpiraEm, setUltimoExpiraEm] = useState("");
   const [copiado, setCopiado] = useState(false);
   const [gerando, setGerando] = useState(false);
   const [copiandoUltimoLink, setCopiandoUltimoLink] = useState(false);
@@ -173,9 +176,42 @@ function CriacaoProva({ token, onCreated }) {
     api("/api/config").then((d) => setMaterias(d.materias_padrao || [])).catch(() => {});
   }, []);
 
+  const alunosSelecionadosSet = new Set(alunosAutorizados.map(Number));
+
+  function toggleAlunoAutorizado(alunoId, marcado) {
+    const id = Number(alunoId);
+    setAlunosAutorizados((prev) => {
+      const atual = new Set(prev.map(Number));
+      if (marcado) atual.add(id);
+      else atual.delete(id);
+      return Array.from(atual);
+    });
+  }
+
+  function toggleTurmaAutorizada(turma, marcado) {
+    const ids = (turma.alunos || []).map((aluno) => Number(aluno.id));
+    setAlunosAutorizados((prev) => {
+      const atual = new Set(prev.map(Number));
+      ids.forEach((id) => {
+        if (marcado) atual.add(id);
+        else atual.delete(id);
+      });
+      return Array.from(atual);
+    });
+  }
+
+  function turmaInteiraSelecionada(turma) {
+    const ids = (turma.alunos || []).map((aluno) => Number(aluno.id));
+    return ids.length > 0 && ids.every((id) => alunosSelecionadosSet.has(id));
+  }
+
   function iniciarEtapa2() {
     if (!config.titulo.trim() || !config.materia.trim()) {
       setErro("Preencha materia e titulo.");
+      return;
+    }
+    if (!alunosAutorizados.length) {
+      setErro("Selecione pelo menos um aluno autorizado para esta prova.");
       return;
     }
     setErro("");
@@ -224,6 +260,10 @@ function CriacaoProva({ token, onCreated }) {
       setErro("Preencha todos os campos obrigatórios.");
       return;
     }
+    if (!alunosAutorizados.length) {
+      setErro("Selecione pelo menos um aluno autorizado para esta prova.");
+      return;
+    }
     setErro("");
     setGerando(true);
     try {
@@ -252,16 +292,23 @@ function CriacaoProva({ token, onCreated }) {
         "/api/provas",
         {
           method: "POST",
-          body: JSON.stringify({ materia: config.materia, titulo: config.titulo, questoes: payloadQuestoes })
+          body: JSON.stringify({
+            materia: config.materia,
+            titulo: config.titulo,
+            questoes: payloadQuestoes,
+            alunos_autorizados: alunosAutorizados,
+          })
         },
         token
       );
-      const link = `${window.location.origin}/aluno/${created.id}`;
+      const link = `${window.location.origin}/aluno/${created.id}?token=${created.token}`;
       setUltimoLink(link);
+      setUltimoExpiraEm(created.expira_em || "");
       setCopiado(false);
       setEtapa(1);
       setConfig({ materia: "", titulo: "", qtd: 5, modo: "multipla_escolha", qtdOp: 4 });
       setQuestoes([]);
+      setAlunosAutorizados([]);
       await onCreated();
     } catch (e) {
       setErro(getErrorMessage(e));
@@ -305,11 +352,46 @@ function CriacaoProva({ token, onCreated }) {
               <input type="number" min="2" max="5" value={config.qtdOp} onChange={(e) => setConfig((c) => ({ ...c, qtdOp: e.target.value }))} />
             </>
           ) : null}
+          <div className="student-picker">
+            <h3>Quais alunos irão fazer essa prova?</h3>
+            {carregandoTurmas ? <p>Carregando turmas...</p> : null}
+            {!carregandoTurmas && !(turmas || []).length ? (
+              <p className="empty-note">Cadastre uma turma na aba Alunos antes de criar uma prova.</p>
+            ) : null}
+            {(turmas || []).map((turma) => (
+              <div className="turma-picker" key={turma.id}>
+                <label className="check-row turma-check">
+                  <input
+                    type="checkbox"
+                    checked={turmaInteiraSelecionada(turma)}
+                    onChange={(e) => toggleTurmaAutorizada(turma, e.target.checked)}
+                  />
+                  <span>{turma.nome} - selecionar turma inteira</span>
+                </label>
+                <div className="student-checks">
+                  {(turma.alunos || []).map((aluno) => (
+                    <label className="check-row" key={aluno.id}>
+                      <input
+                        type="checkbox"
+                        checked={alunosSelecionadosSet.has(Number(aluno.id))}
+                        onChange={(e) => toggleAlunoAutorizado(aluno.id, e.target.checked)}
+                      />
+                      <span>{aluno.nome}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <p className="selection-count">{alunosAutorizados.length} aluno(s) selecionado(s).</p>
+          </div>
           <button onClick={iniciarEtapa2}>Proximo</button>
           {ultimoLink ? (
             <div className="link-box">
               <p>Link da prova criada:</p>
               <input readOnly value={ultimoLink} />
+              {ultimoExpiraEm ? (
+                <p>Link válido por {LINK_EXPIRATION_LABEL}, até {new Date(ultimoExpiraEm).toLocaleString()}.</p>
+              ) : null}
               <button onClick={() => copiarLink(ultimoLink)} disabled={copiandoUltimoLink}>
                 {copiandoUltimoLink ? "Copiando..." : "Copiar link"}
               </button>
@@ -382,10 +464,184 @@ function CriacaoProva({ token, onCreated }) {
   );
 }
 
+function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh }) {
+  const [mostrarForm, setMostrarForm] = useState(false);
+  const [nomeTurma, setNomeTurma] = useState("");
+  const [qtdAlunos, setQtdAlunos] = useState(1);
+  const [nomesAlunos, setNomesAlunos] = useState([]);
+  const [erro, setErro] = useState("");
+  const [mensagem, setMensagem] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [excluindoTurmaId, setExcluindoTurmaId] = useState("");
+
+  function gerarLista() {
+    const total = Number(qtdAlunos);
+    if (!Number.isInteger(total) || total < 1) {
+      setErro("Informe uma quantidade valida de alunos.");
+      return;
+    }
+    if (total > 120) {
+      setErro("Crie turmas com ate 120 alunos por vez.");
+      return;
+    }
+    setErro("");
+    setMensagem("");
+    setNomesAlunos((prev) => Array.from({ length: total }).map((_, i) => prev[i] || ""));
+  }
+
+  function atualizarNomeAluno(index, valor) {
+    setNomesAlunos((prev) => prev.map((nome, i) => (i === index ? valor : nome)));
+  }
+
+  async function salvarTurma() {
+    if (salvando) return;
+    const alunos = nomesAlunos.map((nome) => nome.trim());
+    if (!nomeTurma.trim()) {
+      setErro("Informe o nome da turma.");
+      return;
+    }
+    if (!alunos.length) {
+      setErro("Clique em Gerar lista antes de salvar a turma.");
+      return;
+    }
+    if (alunos.some((nome) => !nome)) {
+      setErro("Preencha o nome de todos os alunos gerados.");
+      return;
+    }
+    setErro("");
+    setMensagem("");
+    setSalvando(true);
+    try {
+      await criarTurma({ nome: nomeTurma, alunos }, token);
+      setMensagem("Turma salva com sucesso.");
+      setNomeTurma("");
+      setQtdAlunos(1);
+      setNomesAlunos([]);
+      setMostrarForm(false);
+      await onRefresh();
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function removerTurma(turmaId) {
+    if (excluindoTurmaId) return;
+    const confirmar = window.confirm("Excluir esta turma tambem remove os alunos dela das provas autorizadas. Deseja continuar?");
+    if (!confirmar) return;
+    setErro("");
+    setMensagem("");
+    setExcluindoTurmaId(turmaId);
+    try {
+      await excluirTurma(turmaId, token);
+      setMensagem("Turma excluida com sucesso.");
+      await onRefresh();
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setExcluindoTurmaId("");
+    }
+  }
+
+  return (
+    <section className="card">
+      <div className="section-title-row">
+        <div>
+          <h2>Alunos</h2>
+          <p>Cadastre turmas e escolha depois quem pode acessar cada prova. Total: {totalAlunos} aluno(s).</p>
+        </div>
+        <button onClick={() => setMostrarForm((v) => !v)} disabled={salvando}>
+          {mostrarForm ? "Fechar" : "Inserir turma"}
+        </button>
+      </div>
+
+      {mostrarForm ? (
+        <div className="turma-form">
+          <input
+            placeholder="Nome da turma"
+            value={nomeTurma}
+            disabled={salvando}
+            onChange={(e) => setNomeTurma(e.target.value)}
+          />
+          <label>Quantidade de alunos</label>
+          <input
+            type="number"
+            min="1"
+            max="120"
+            value={qtdAlunos}
+            disabled={salvando}
+            onChange={(e) => setQtdAlunos(e.target.value)}
+          />
+          <div className="actions">
+            <button type="button" onClick={gerarLista} disabled={salvando}>
+              Gerar lista
+            </button>
+            <button type="button" onClick={salvarTurma} disabled={salvando || !nomesAlunos.length}>
+              {salvando ? "Salvando..." : "Salvar turma"}
+            </button>
+          </div>
+
+          {nomesAlunos.length ? (
+            <div className="student-name-grid">
+              {nomesAlunos.map((nomeAluno, i) => (
+                <label key={i}>
+                  Aluno {i + 1}
+                  <input
+                    placeholder="Nome completo"
+                    value={nomeAluno}
+                    disabled={salvando}
+                    onChange={(e) => atualizarNomeAluno(i, e.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {erro ? <p className="erro">{erro}</p> : null}
+      {mensagem ? <p className="ok">{mensagem}</p> : null}
+      {carregando ? <p>Carregando turmas...</p> : null}
+
+      <div className="turmas-list">
+        {(turmas || []).length ? (
+          turmas.map((turma) => (
+            <article className="list-item turma-card" key={turma.id}>
+              <div className="section-title-row compact">
+                <div>
+                  <strong>{turma.nome}</strong>
+                  <span>{(turma.alunos || []).length} aluno(s)</span>
+                </div>
+                <button
+                  className="danger"
+                  onClick={() => removerTurma(turma.id)}
+                  disabled={Boolean(excluindoTurmaId)}
+                >
+                  {excluindoTurmaId === turma.id ? "Excluindo..." : "Excluir turma"}
+                </button>
+              </div>
+              <div className="student-chips">
+                {(turma.alunos || []).map((aluno) => (
+                  <span key={aluno.id}>{aluno.nome}</span>
+                ))}
+              </div>
+            </article>
+          ))
+        ) : (
+          !carregando && <p className="empty-note">Nenhuma turma cadastrada ainda.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function DashboardProfessor() {
   const [auth, setAuth] = useState(null);
   const [aba, setAba] = useState("criar");
   const [provas, setProvas] = useState([]);
+  const [turmas, setTurmas] = useState([]);
+  const [alunos, setAlunos] = useState([]);
   const [provaSelecionada, setProvaSelecionada] = useState("");
   const [resultados, setResultados] = useState([]);
   const [estatisticasResultados, setEstatisticasResultados] = useState(null);
@@ -396,7 +652,9 @@ function DashboardProfessor() {
   const [excluindoId, setExcluindoId] = useState("");
   const [copiandoLinkId, setCopiandoLinkId] = useState("");
   const [linkCopiadoId, setLinkCopiadoId] = useState("");
+  const [renovandoLinkId, setRenovandoLinkId] = useState("");
   const [baixandoCsv, setBaixandoCsv] = useState(false);
+  const [carregandoTurmas, setCarregandoTurmas] = useState(false);
   const deleteLockRef = useRef("");
   const resultadosRequestRef = useRef(0);
   const monitoramentoRequestRef = useRef(0);
@@ -419,8 +677,30 @@ function DashboardProfessor() {
     }
   }
 
+  async function carregarTurmas(token = auth?.token) {
+    if (!token) return [];
+    setCarregandoTurmas(true);
+    try {
+      const [turmasData, alunosData] = await Promise.all([
+        listarTurmas(token),
+        listarAlunos(token),
+      ]);
+      setTurmas(turmasData || []);
+      setAlunos(alunosData || []);
+      return turmasData || [];
+    } catch (e) {
+      setErro(getErrorMessage(e));
+      return [];
+    } finally {
+      setCarregandoTurmas(false);
+    }
+  }
+
   useEffect(() => {
-    if (auth?.token) carregarProvas(auth.token);
+    if (auth?.token) {
+      carregarProvas(auth.token);
+      carregarTurmas(auth.token);
+    }
   }, [auth]);
 
   useEffect(() => {
@@ -518,6 +798,32 @@ function DashboardProfessor() {
     }
   }
 
+  async function renovarLink(id) {
+    if (renovandoLinkId) return;
+    setErro("");
+    setRenovandoLinkId(id);
+    try {
+      const data = await api(`/api/provas/${id}/link`, { method: "POST" }, auth.token);
+      const novoLink = `${window.location.origin}/aluno/${id}?token=${data.token}`;
+      setProvas((prev) =>
+        prev.map((p) =>
+          p.id === id ? { ...p, token_acesso: data.token, expira_em: data.expira_em } : p
+        )
+      );
+      try {
+        await navigator.clipboard.writeText(novoLink);
+        setLinkCopiadoId(id);
+        setTimeout(() => setLinkCopiadoId(""), 1400);
+      } catch {
+        setErro("Novo link gerado, mas nao foi possivel copiar automaticamente.");
+      }
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setRenovandoLinkId("");
+    }
+  }
+
   function baixarCsvResultados() {
     if (baixandoCsv || !resultados.length) return;
     setBaixandoCsv(true);
@@ -547,26 +853,48 @@ function DashboardProfessor() {
       <p>Bem-vindo, {auth.usuario_nome}</p>
       <div className="actions">
         <button onClick={() => setAba("criar")} className={aba === "criar" ? "" : "secondary"}>Criar Prova</button>
+        <button onClick={() => setAba("alunos")} className={aba === "alunos" ? "" : "secondary"}>Alunos</button>
         <button onClick={() => setAba("provas")} className={aba === "provas" ? "" : "secondary"}>Minhas Provas</button>
         <button onClick={() => setAba("resultados")} className={aba === "resultados" ? "" : "secondary"}>Resultados</button>
         <button onClick={() => setAba("monitoramento")} className={aba === "monitoramento" ? "" : "secondary"}>Monitoramento</button>
       </div>
       {erro ? <p className="erro">{erro}</p> : null}
 
-      {aba === "criar" ? <CriacaoProva token={auth.token} onCreated={() => carregarProvas()} /> : null}
+      {aba === "criar" ? (
+        <CriacaoProva
+          token={auth.token}
+          turmas={turmas}
+          carregandoTurmas={carregandoTurmas}
+          onCreated={() => carregarProvas()}
+        />
+      ) : null}
+
+      {aba === "alunos" ? (
+        <TurmasAlunos
+          token={auth.token}
+          turmas={turmas}
+          totalAlunos={alunos.length}
+          carregando={carregandoTurmas}
+          onRefresh={() => carregarTurmas(auth.token)}
+        />
+      ) : null}
 
       {aba === "provas" ? (
         <section className="card">
           <h2>Minhas Provas</h2>
           {provas.map((p) => {
-            const link = `${window.location.origin}/aluno/${p.id}`;
+            const link = p.token_acesso ? `${window.location.origin}/aluno/${p.id}?token=${p.token_acesso}` : "";
             return (
               <article className="list-item" key={p.id}>
                 <strong>{p.titulo}</strong>
                 <span>{p.materia} - {p.quantidade_questoes} questoes</span>
-                <input readOnly value={link} />
+                {link ? <input readOnly value={link} /> : <span>Nenhum link ativo. Gere um novo link para enviar aos alunos.</span>}
+                {p.expira_em ? <span>Válido até {new Date(p.expira_em).toLocaleString()}.</span> : null}
                 <div className="actions">
-                  <button onClick={() => copiarLink(link, p.id)} disabled={Boolean(copiandoLinkId)}>
+                  <button onClick={() => renovarLink(p.id)} disabled={Boolean(renovandoLinkId)}>
+                    {renovandoLinkId === p.id ? "Renovando..." : "Renovar link"}
+                  </button>
+                  <button onClick={() => copiarLink(link, p.id)} disabled={Boolean(copiandoLinkId) || !link}>
                     {copiandoLinkId === p.id ? "Copiando..." : linkCopiadoId === p.id ? "Copiado" : "Copiar link"}
                   </button>
                   <button className="danger" onClick={() => excluir(p.id)} disabled={Boolean(excluindoId)}>
@@ -645,16 +973,18 @@ function DashboardProfessor() {
                   <th>Status</th>
                   <th>Saidas</th>
                   <th>Ultimo evento</th>
+                  <th>Detalhe</th>
                   <th>Ultima atividade</th>
                 </tr>
               </thead>
               <tbody>
                 {monitor.map((m, i) => (
-                  <tr key={i}>
+                  <tr key={i} className={m.status === "fraude" ? "fraud-row" : ""}>
                     <td>{m.nome}</td>
                     <td>{m.status}</td>
                     <td>{m.vezes_saiu}</td>
                     <td>{m.ultimo_evento}</td>
+                    <td>{m.detalhe_ultimo || "-"}</td>
                     <td>{m.data_hora_ultima}</td>
                   </tr>
                 ))}
@@ -669,58 +999,149 @@ function DashboardProfessor() {
 
 function AlunoPage() {
   const { provaId } = useParams();
+  const location = useLocation();
+  const token = new URLSearchParams(location.search).get("token") || "";
   const [prova, setProva] = useState(null);
   const [nome, setNome] = useState("");
   const [numero, setNumero] = useState("");
   const [logado, setLogado] = useState(false);
   const [bloqueado, setBloqueado] = useState(false);
+  const [bloqueioMensagem, setBloqueioMensagem] = useState("");
   const [respostas, setRespostas] = useState({});
   const [resultado, setResultado] = useState(null);
   const [erro, setErro] = useState("");
   const [acaoAluno, setAcaoAluno] = useState("");
   const enviarLockRef = useRef(false);
+  const securityEventLockRef = useRef(false);
 
   useEffect(() => {
-    api(`/api/aluno/provas/${provaId}`).then(setProva).catch((e) => setErro(getErrorMessage(e)));
-  }, [provaId]);
+    if (!token) {
+      setBloqueioMensagem("Link inválido. Solicite um novo link ao professor.");
+      return;
+    }
+    setBloqueioMensagem("");
+    api(`/api/aluno/provas/${provaId}?token=${encodeURIComponent(token)}`)
+      .then(setProva)
+      .catch((e) => setBloqueioMensagem(getErrorMessage(e)));
+  }, [provaId, token]);
 
   useEffect(() => {
     if (!logado || !nome || resultado) return;
 
     const bloquearAcesso = async (evento, detalhe) => {
+      if (securityEventLockRef.current) return;
+      securityEventLockRef.current = true;
+      setBloqueioMensagem("A prova foi bloqueada por atividade suspeita. Informe o professor.");
       setBloqueado(true);
       setLogado(false);
       try {
         await api(`/api/aluno/provas/${provaId}/eventos`, {
           method: "POST",
-          body: JSON.stringify({ nome_aluno: nome, evento, detalhe })
+          body: JSON.stringify({ nome_aluno: nome, evento, detalhe, token })
         });
       } catch {
         // noop
       }
     };
 
+    const initialWidth = window.innerWidth;
+    const initialHeight = window.innerHeight;
+    const startedAt = Date.now();
+
+    const onBlur = () => {
+      bloquearAcesso("blur", "perda_de_foco_da_janela");
+    };
+
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        bloquearAcesso("blur", "aba_oculta_bloqueio");
+        bloquearAcesso("visibility_hidden", "aba_oculta_bloqueio");
       }
     };
 
+    const onResize = () => {
+      if (Date.now() - startedAt < 1000) return;
+      if (initialWidth < 900 && initialHeight < 650) return;
+      const widthDrop = window.innerWidth < initialWidth * 0.65;
+      const heightDrop = window.innerHeight < initialHeight * 0.65 || window.innerHeight < 420;
+      if (widthDrop || heightDrop) {
+        bloquearAcesso(
+          "resize_suspeito",
+          `janela_redimensionada_${initialWidth}x${initialHeight}_para_${window.innerWidth}x${window.innerHeight}`
+        );
+      }
+    };
+
+    window.addEventListener("blur", onBlur, true);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("blur", onBlur, true);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [logado, nome, provaId, resultado, token]);
+
+  useEffect(() => {
+    if (!logado || !nome || resultado || bloqueioMensagem) return;
+
+    const isEditable = (target) =>
+      target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+
+    const registrarTentativaBloqueada = (detalhe) => {
+      setErro("Ação bloqueada durante a prova.");
+      api(`/api/aluno/provas/${provaId}/eventos`, {
+        method: "POST",
+        body: JSON.stringify({
+          nome_aluno: nome,
+          evento: "tentativa_bloqueada",
+          detalhe,
+          token,
+        }),
+      }).catch(() => {});
+    };
+
+    const blockEvent = (e, detalhe) => {
+      e.preventDefault();
+      e.stopPropagation();
+      registrarTentativaBloqueada(detalhe);
+    };
+
+    const onCopy = (e) => blockEvent(e, "copy");
+    const onPaste = (e) => blockEvent(e, "paste");
+    const onCut = (e) => blockEvent(e, "cut");
+    const onContextMenu = (e) => blockEvent(e, "contextmenu");
+    const onSelectStart = (e) => {
+      if (isEditable(e.target)) return;
+      blockEvent(e, "selectstart");
+    };
     const onKeyDown = (e) => {
       const key = (e.key || "").toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && ["c", "v", "x", "a", "u", "s", "t", "n"].includes(key)) {
-        e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && ["c", "v", "x", "a", "s", "p"].includes(key)) {
+        blockEvent(e, `atalho_${key}`);
       }
-      if (key === "f12") e.preventDefault();
+      if (key === "f12") {
+        blockEvent(e, "f12");
+      }
+      if (key === "printscreen") {
+        blockEvent(e, "printscreen");
+      }
     };
 
-    document.addEventListener("visibilitychange", onVisibility);
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("copy", onCopy, true);
+    document.addEventListener("paste", onPaste, true);
+    document.addEventListener("cut", onCut, true);
+    document.addEventListener("contextmenu", onContextMenu, true);
+    document.addEventListener("selectstart", onSelectStart, true);
+    document.addEventListener("keydown", onKeyDown, true);
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("copy", onCopy, true);
+      document.removeEventListener("paste", onPaste, true);
+      document.removeEventListener("cut", onCut, true);
+      document.removeEventListener("contextmenu", onContextMenu, true);
+      document.removeEventListener("selectstart", onSelectStart, true);
+      document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [logado, nome, provaId, resultado]);
+  }, [logado, nome, resultado, bloqueioMensagem, provaId, token]);
 
   async function entrar() {
     if (acaoAluno) return;
@@ -733,7 +1154,7 @@ function AlunoPage() {
     try {
       const data = await api(`/api/aluno/provas/${provaId}/login`, {
         method: "POST",
-        body: JSON.stringify({ nome_aluno: nome, numero })
+        body: JSON.stringify({ nome_aluno: nome, numero, token })
       });
       if (data.ja_entregue) {
         setResultado({ nota: data.nota, acertos: data.acertos, total: data.total, entregue: true });
@@ -760,7 +1181,7 @@ function AlunoPage() {
     try {
       const data = await api(`/api/aluno/provas/${provaId}/responder`, {
         method: "POST",
-        body: JSON.stringify({ nome_aluno: nome, respostas })
+        body: JSON.stringify({ nome_aluno: nome, respostas, token })
       });
       setResultado({ ...data, entregue: true });
       setLogado(false);
@@ -770,6 +1191,17 @@ function AlunoPage() {
     } finally {
       setAcaoAluno("");
     }
+  }
+
+  if (bloqueioMensagem) {
+    return (
+      <main className="page">
+        <section className="card">
+          <h2>Acesso indisponível</h2>
+          <p>{bloqueioMensagem}</p>
+        </section>
+      </main>
+    );
   }
 
   if (!prova) return <main className="page"><p>Carregando prova...</p>{erro ? <p className="erro">{erro}</p> : null}</main>;
@@ -787,7 +1219,7 @@ function AlunoPage() {
   }
 
   return (
-    <main className="page">
+    <main className={`page ${logado ? "exam-screen" : ""}`}>
       <h1>{prova.titulo}</h1>
       <p>{prova.materia}</p>
       {bloqueado ? (

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
@@ -8,7 +8,8 @@ import uuid
 from auth.professor import AuthService
 from prova.services import ProvaService
 from eventos.rastreamento import registrar_evento, obter_eventos_prova
-from core.constants import MATERIAS_PADRAO
+from core.constants import LINK_EXPIRATION_MINUTES, MATERIAS_PADRAO
+from core.normalization import normalizar_nome
 
 
 app = FastAPI(title="Prova Facil API")
@@ -40,22 +41,31 @@ class ProvaCreatePayload(BaseModel):
     materia: str
     titulo: str
     questoes: List[Dict[str, Any]]
+    alunos_autorizados: Optional[List[int]] = None
+
+
+class TurmaCreatePayload(BaseModel):
+    nome: str
+    alunos: List[str] = Field(default_factory=list)
 
 
 class AlunoLoginPayload(BaseModel):
     nome_aluno: str
     numero: str
+    token: Optional[str] = None
 
 
 class EventoPayload(BaseModel):
     nome_aluno: str
     evento: str
     detalhe: str = ""
+    token: Optional[str] = None
 
 
 class RespostaPayload(BaseModel):
     nome_aluno: str
     respostas: Dict[str, Any]
+    token: Optional[str] = None
 
 
 def get_user_from_token(token: Optional[str]):
@@ -78,6 +88,47 @@ def prova_com_meta(prova: Dict[str, Any]):
         **prova,
         "quantidade_questoes": len(questoes),
     }
+
+
+def format_expira_em(expira_em):
+    if not expira_em:
+        return None
+    suffix = "Z" if getattr(expira_em, "tzinfo", None) is None else ""
+    return f"{expira_em.isoformat()}{suffix}"
+
+
+def validar_acesso_aluno(prova_id: str, token: Optional[str]):
+    if not token:
+        raise HTTPException(
+            status_code=403,
+            detail="Link inválido. Solicite um novo link ao professor.",
+        )
+
+    acesso = ProvaService.buscar_acesso_prova(prova_id, token)
+    if not acesso:
+        raise HTTPException(
+            status_code=403,
+            detail="Link inválido. Solicite um novo link ao professor.",
+        )
+    if int(acesso.get("ativo") or 0) != 1:
+        raise HTTPException(
+            status_code=403,
+            detail="Este acesso foi bloqueado ou revogado. Solicite um novo link ao professor.",
+        )
+    expira_em = acesso.get("expira_em")
+    if not expira_em:
+        raise HTTPException(
+            status_code=403,
+            detail="Este link expirou. Solicite um novo link ao professor.",
+        )
+    from datetime import datetime
+
+    if expira_em <= datetime.utcnow():
+        raise HTTPException(
+            status_code=403,
+            detail="Este link expirou. Solicite um novo link ao professor.",
+        )
+    return acesso
 
 
 @app.get("/api/config")
@@ -103,11 +154,56 @@ def login(payload: LoginPayload):
     return {"token": token, "usuario_id": uid, "usuario_nome": payload.usuario.strip()}
 
 
+@app.get("/api/turmas")
+def listar_turmas(x_auth_token: Optional[str] = Header(default=None)):
+    user = get_user_from_token(x_auth_token)
+    return ProvaService.listar_turmas(user["usuario_id"])
+
+
+@app.post("/api/turmas")
+def criar_turma(payload: TurmaCreatePayload, x_auth_token: Optional[str] = Header(default=None)):
+    user = get_user_from_token(x_auth_token)
+    nome = payload.nome.strip()
+    alunos = [aluno.strip() for aluno in payload.alunos if aluno and aluno.strip()]
+    if not nome:
+        raise HTTPException(status_code=400, detail="Informe o nome da turma.")
+    if not alunos:
+        raise HTTPException(status_code=400, detail="Informe pelo menos um aluno.")
+    turma = ProvaService.criar_turma(user["usuario_id"], nome, alunos)
+    return {"ok": True, "turma": turma}
+
+
+@app.delete("/api/turmas/{turma_id}")
+def excluir_turma(turma_id: int, x_auth_token: Optional[str] = Header(default=None)):
+    user = get_user_from_token(x_auth_token)
+    removida = ProvaService.excluir_turma(turma_id, user["usuario_id"])
+    if not removida:
+        raise HTTPException(status_code=404, detail="Turma nao encontrada.")
+    return {"ok": True, "message": "Turma excluida com sucesso."}
+
+
+@app.get("/api/alunos")
+def listar_alunos(x_auth_token: Optional[str] = Header(default=None)):
+    user = get_user_from_token(x_auth_token)
+    return ProvaService.listar_alunos(user["usuario_id"])
+
+
 @app.get("/api/provas")
 def listar_provas(x_auth_token: Optional[str] = Header(default=None)):
     user = get_user_from_token(x_auth_token)
     provas = ProvaService.listar_provas(user["usuario_id"])
-    return [prova_com_meta(p) for p in provas]
+    dados = []
+    for prova in provas:
+        item = prova_com_meta(prova)
+        acesso = ProvaService.buscar_acesso_ativo(prova["id"])
+        if acesso:
+            item["token_acesso"] = acesso["token"]
+            item["expira_em"] = format_expira_em(acesso.get("expira_em"))
+        else:
+            item["token_acesso"] = None
+            item["expira_em"] = None
+        dados.append(item)
+    return dados
 
 
 @app.get("/api/provas/{prova_id}")
@@ -119,10 +215,45 @@ def detalhar_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=N
 @app.post("/api/provas")
 def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Header(default=None)):
     user = get_user_from_token(x_auth_token)
+    aluno_ids = payload.alunos_autorizados or []
+    if not aluno_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Selecione pelo menos um aluno autorizado para esta prova.",
+        )
+    if not ProvaService.alunos_pertencem_usuario(user["usuario_id"], aluno_ids):
+        raise HTTPException(
+            status_code=403,
+            detail="A lista de alunos autorizados contem alunos invalidos.",
+        )
+
     prova_id = ProvaService.salvar_prova(
         user["usuario_id"], payload.materia.strip(), payload.titulo.strip(), payload.questoes
     )
-    return {"id": prova_id}
+    try:
+        ProvaService.salvar_alunos_autorizados(prova_id, aluno_ids)
+    except Exception:
+        ProvaService.excluir_prova(prova_id)
+        raise
+
+    acesso = ProvaService.gerar_token_acesso(prova_id)
+    return {
+        "id": prova_id,
+        "token": acesso["token"],
+        "expira_em": format_expira_em(acesso["expira_em"]),
+    }
+
+
+@app.post("/api/provas/{prova_id}/link")
+def renovar_link_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=None)):
+    validar_posse_prova(prova_id, x_auth_token)
+    acesso = ProvaService.gerar_token_acesso(prova_id)
+    return {
+        "ok": True,
+        "token": acesso["token"],
+        "expira_em": format_expira_em(acesso["expira_em"]),
+        "validade_minutos": LINK_EXPIRATION_MINUTES,
+    }
 
 
 @app.put("/api/provas/{prova_id}")
@@ -130,7 +261,21 @@ def atualizar_prova(
     prova_id: str, payload: ProvaCreatePayload, x_auth_token: Optional[str] = Header(default=None)
 ):
     validar_posse_prova(prova_id, x_auth_token)
+    if payload.alunos_autorizados is not None:
+        user = get_user_from_token(x_auth_token)
+        if not payload.alunos_autorizados:
+            raise HTTPException(
+                status_code=400,
+                detail="Selecione pelo menos um aluno autorizado para esta prova.",
+            )
+        if not ProvaService.alunos_pertencem_usuario(user["usuario_id"], payload.alunos_autorizados):
+            raise HTTPException(
+                status_code=403,
+                detail="A lista de alunos autorizados contem alunos invalidos.",
+            )
     ProvaService.atualizar_prova(prova_id, payload.materia.strip(), payload.titulo.strip(), payload.questoes)
+    if payload.alunos_autorizados is not None:
+        ProvaService.salvar_alunos_autorizados(prova_id, payload.alunos_autorizados)
     return {"ok": True}
 
 
@@ -167,7 +312,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
             detalhe = (ev.get("detalhe") or "").strip()
             if "chamada" in detalhe.lower() and ":" in detalhe:
                 item["numero_aluno"] = detalhe.split(":")[-1].strip() or "-"
-        elif tipo == "blur":
+        elif tipo in ("blur", "visibility_hidden", "resize_suspeito"):
             item["saidas_aba"] += 1
 
     dados = []
@@ -223,6 +368,7 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
                 "status": "offline",
                 "vezes_saiu": 0,
                 "ultimo_evento": "-",
+                "detalhe_ultimo": "",
                 "data_hora_ultima": "-",
             }
         aluno = estado[nome]
@@ -233,23 +379,33 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
             aluno["ultimo_evento"] = "Login"
             if "chamada" in detalhe.lower() and ":" in detalhe:
                 aluno["chamada"] = detalhe.split(":")[-1].strip()
-        elif tipo == "blur":
+        elif tipo in ("blur", "visibility_hidden"):
             aluno["status"] = "fora_da_aba"
             aluno["vezes_saiu"] += 1
             aluno["ultimo_evento"] = "Saiu da aba"
+        elif tipo == "resize_suspeito":
+            aluno["status"] = "fora_da_aba"
+            aluno["ultimo_evento"] = "Resize suspeito"
+        elif tipo == "tentativa_bloqueada":
+            aluno["ultimo_evento"] = "Tentativa bloqueada"
+        elif tipo == "fraude_nome_nao_autorizado":
+            aluno["status"] = "fraude"
+            aluno["ultimo_evento"] = "Fraude: nome nao autorizado"
         elif tipo == "focus":
             aluno["status"] = "online"
             aluno["ultimo_evento"] = "Voltou para aba"
         elif tipo == "submit":
             aluno["status"] = "finalizou"
             aluno["ultimo_evento"] = "Enviou prova"
+        aluno["detalhe_ultimo"] = detalhe
         aluno["data_hora_ultima"] = ev["timestamp"]
 
     return {"alunos": list(estado.values())}
 
 
 @app.get("/api/aluno/provas/{prova_id}")
-def buscar_prova_aluno(prova_id: str):
+def buscar_prova_aluno(prova_id: str, token: Optional[str] = Query(default=None)):
+    acesso = validar_acesso_aluno(prova_id, token)
     prova = ProvaService.buscar_prova(prova_id)
     if not prova:
         raise HTTPException(status_code=404, detail="Prova nao encontrada")
@@ -270,11 +426,13 @@ def buscar_prova_aluno(prova_id: str):
         "titulo": prova["titulo"],
         "materia": prova["materia"],
         "questoes": questoes_publicas,
+        "expira_em": format_expira_em(acesso.get("expira_em")),
     }
 
 
 @app.post("/api/aluno/provas/{prova_id}/login")
 def aluno_login(prova_id: str, payload: AlunoLoginPayload):
+    validar_acesso_aluno(prova_id, payload.token)
     prova = ProvaService.buscar_prova(prova_id)
     if not prova:
         raise HTTPException(status_code=404, detail="Prova nao encontrada")
@@ -282,11 +440,24 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
     numero = payload.numero.strip()
     if not nome or not numero:
         raise HTTPException(status_code=400, detail="Preencha nome e numero")
+    requer_autorizacao = int(prova.get("requer_alunos_autorizados") or 0) == 1
+    if requer_autorizacao and not ProvaService.aluno_autorizado_prova(prova_id, nome):
+        detalhe = f"Nome informado nao esta na lista de alunos autorizados: {nome}"
+        registrar_evento(prova_id, nome, "fraude_nome_nao_autorizado", detalhe)
+        ProvaService.bloquear_token_acesso(prova_id, payload.token)
+        raise HTTPException(
+            status_code=403,
+            detail="Fraude detectada: seu nome nao esta autorizado para esta prova.",
+        )
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
         prova = ProvaService.buscar_prova(prova_id)
         questoes = json.loads(prova["questoes"])
         respostas = ProvaService.buscar_respostas(prova_id)
-        resp_aluno = next((r for r in respostas if r["nome_aluno"] == nome), None)
+        nome_normalizado = normalizar_nome(nome)
+        resp_aluno = next(
+            (r for r in respostas if normalizar_nome(r["nome_aluno"]) == nome_normalizado),
+            None,
+        )
         if resp_aluno:
             respostas_aluno = json.loads(resp_aluno["respostas"])
             acertos = ProvaService.contar_acertos(questoes, respostas_aluno)
@@ -303,19 +474,32 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
 
 @app.post("/api/aluno/provas/{prova_id}/eventos")
 def aluno_evento(prova_id: str, payload: EventoPayload):
+    validar_acesso_aluno(prova_id, payload.token)
     prova = ProvaService.buscar_prova(prova_id)
     if not prova:
         raise HTTPException(status_code=404, detail="Prova nao encontrada")
     registrar_evento(prova_id, payload.nome_aluno.strip(), payload.evento, payload.detalhe)
+    if payload.evento in {"blur", "visibility_hidden", "resize_suspeito", "acesso_bloqueado"}:
+        ProvaService.bloquear_token_acesso(prova_id, payload.token)
     return {"ok": True}
 
 
 @app.post("/api/aluno/provas/{prova_id}/responder")
 def responder_prova(prova_id: str, payload: RespostaPayload):
+    validar_acesso_aluno(prova_id, payload.token)
     prova = ProvaService.buscar_prova(prova_id)
     if not prova:
         raise HTTPException(status_code=404, detail="Prova nao encontrada")
     nome = payload.nome_aluno.strip()
+    requer_autorizacao = int(prova.get("requer_alunos_autorizados") or 0) == 1
+    if requer_autorizacao and not ProvaService.aluno_autorizado_prova(prova_id, nome):
+        detalhe = f"Nome informado nao esta na lista de alunos autorizados: {nome}"
+        registrar_evento(prova_id, nome, "fraude_nome_nao_autorizado", detalhe)
+        ProvaService.bloquear_token_acesso(prova_id, payload.token)
+        raise HTTPException(
+            status_code=403,
+            detail="Fraude detectada: seu nome nao esta autorizado para esta prova.",
+        )
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
         raise HTTPException(status_code=400, detail="Aluno ja respondeu esta prova")
     questoes = json.loads(prova["questoes"])

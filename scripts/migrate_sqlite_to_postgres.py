@@ -25,7 +25,7 @@ TABLES = {
         "alertas_fraude",
     ],
     "eventos": ["id", "prova_id", "nome_aluno", "evento", "detalhe", "timestamp"],
-    "acessos_prova": ["token", "prova_id", "ativo", "criado_em"],
+    "acessos_prova": ["token", "prova_id", "ativo", "criado_em", "expira_em"],
 }
 
 
@@ -175,7 +175,7 @@ def filter_rows_by_existing_provas(table_name, rows, valid_prova_ids):
 
 
 def reset_sequences(pg_conn):
-    sequence_tables = ["usuarios", "respostas", "eventos"]
+    sequence_tables = ["usuarios", "turmas", "alunos", "prova_alunos_autorizados", "respostas", "eventos"]
     with pg_conn.cursor() as cur:
         for table_name in sequence_tables:
             cur.execute(

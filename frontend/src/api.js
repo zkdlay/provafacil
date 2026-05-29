@@ -57,3 +57,26 @@ export async function api(path, options = {}, token) {
   }
   return data;
 }
+
+export function listarTurmas(token) {
+  return api("/api/turmas", {}, token);
+}
+
+export function listarAlunos(token) {
+  return api("/api/alunos", {}, token);
+}
+
+export function criarTurma(payload, token) {
+  return api(
+    "/api/turmas",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    token
+  );
+}
+
+export function excluirTurma(turmaId, token) {
+  return api(`/api/turmas/${turmaId}`, { method: "DELETE" }, token);
+}

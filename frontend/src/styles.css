@@ -146,6 +146,17 @@ label { display: block; }
   overflow-wrap: anywhere;
 }
 
+.exam-screen {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.exam-screen input,
+.exam-screen textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .preview {
   max-width: 260px;
   width: 100%;
@@ -168,6 +179,117 @@ label { display: block; }
   border: 1px solid #cbd5e1;
   border-radius: 10px;
   background: #f8fafc;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-title-row h2,
+.section-title-row p {
+  margin-top: 0;
+}
+
+.section-title-row.compact {
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.section-title-row.compact > div {
+  display: grid;
+  gap: 3px;
+}
+
+.student-picker,
+.turma-form {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.student-picker h3 {
+  margin: 0 0 10px;
+}
+
+.turma-picker {
+  padding: 10px;
+  border: 1px solid #dbe5f0;
+  border-radius: 12px;
+  background: #fff;
+  margin-bottom: 10px;
+}
+
+.student-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.check-row:hover {
+  background: #eff6ff;
+}
+
+.check-row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.turma-check {
+  font-weight: 700;
+  background: #eef8f6;
+}
+
+.selection-count,
+.empty-note {
+  margin-bottom: 0;
+}
+
+.student-name-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.turma-card {
+  border: 1px solid #edf2f7;
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 10px;
+  background: #fff;
+}
+
+.student-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.student-chips span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #eef8f6;
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .stats-grid {
@@ -222,6 +344,8 @@ label { display: block; }
 
 .excel-table tbody tr:nth-child(even) { background: #fcfdff; }
 .excel-table tbody tr:hover { background: #f1f7ff; }
+.excel-table tbody tr.fraud-row { background: #fff1f2; }
+.excel-table tbody tr.fraud-row:hover { background: #ffe4e6; }
 
 @keyframes fadeSlide {
   from { opacity: 0; transform: translateY(4px); }
