@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Route, Routes, useLocation, useParams } from "react-router-dom";
 import {
   api,
@@ -83,7 +83,7 @@ function AuthProfessor({ onLogin }) {
   async function entrar() {
     if (authAction) return;
     if (!usuario.trim() || !senha.trim()) {
-      setErro("Preencha todos os campos obrigatÃ³rios.");
+      setErro("Preencha todos os campos obrigatórios.");
       return;
     }
     let completed = false;
@@ -108,7 +108,7 @@ function AuthProfessor({ onLogin }) {
   async function registrar() {
     if (authAction) return;
     if (!usuario.trim() || !senha.trim()) {
-      setErro("Preencha todos os campos obrigatÃ³rios.");
+      setErro("Preencha todos os campos obrigatórios.");
       return;
     }
     let completed = false;
@@ -138,7 +138,7 @@ function AuthProfessor({ onLogin }) {
     <main className="auth-screen">
       <section className="auth-side-note">
         <h3>Plataforma de provas online</h3>
-        <p>Crie avaliaÃ§Ãµes, compartilhe links com alunos e acompanhe resultados em tempo real.</p>
+        <p>Crie avaliações, compartilhe links com alunos e acompanhe resultados em tempo real.</p>
       </section>
       <section className="card auth-card">
         <p className="auth-kicker">Prova Facil</p>
@@ -1189,7 +1189,7 @@ function DashboardProfessor() {
                 <strong>{p.titulo}</strong>
                 <span>{p.materia} - {p.quantidade_questoes} questoes</span>
                 {link ? <input readOnly value={link} /> : <span>Nenhum link ativo. Gere um novo link para enviar aos alunos.</span>}
-                {p.expira_em ? <span>VÃ¡lido atÃ© {new Date(p.expira_em).toLocaleString()}.</span> : null}
+                {p.expira_em ? <span>Válido até {new Date(p.expira_em).toLocaleString()}.</span> : null}
                 <div className="actions">
                   <button onClick={() => renovarLink(p.id)} disabled={Boolean(renovandoLinkId)}>
                     {renovandoLinkId === p.id ? "Renovando..." : "Renovar link"}
@@ -1349,7 +1349,7 @@ function DashboardProfessor() {
                   <th>Ultimo evento</th>
                   <th>Detalhe</th>
                   <th>Ultima atividade</th>
-                  <th>AÃ§Ãµes</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -1409,10 +1409,28 @@ function AlunoPage() {
   const [acaoAluno, setAcaoAluno] = useState("");
   const enviarLockRef = useRef(false);
   const securityEventLockRef = useRef(false);
+  const ultimaInteracaoInternaRef = useRef(Date.now());
+  const loginEmAndamentoRef = useRef(false);
+  const faseAluno = bloqueado
+    ? "bloqueada"
+    : resultado?.entregue
+      ? "finalizada"
+      : logado
+        ? "prova_iniciada"
+        : "login";
+  const provaIniciada = faseAluno === "prova_iniciada";
+
+  function marcarInteracaoInterna() {
+    ultimaInteracaoInternaRef.current = Date.now();
+  }
+
+  function houveInteracaoInternaRecente(janelaMs = 900) {
+    return loginEmAndamentoRef.current || Date.now() - ultimaInteracaoInternaRef.current < janelaMs;
+  }
 
   useEffect(() => {
     if (!token) {
-      setBloqueioMensagem("Link invÃ¡lido. Solicite um novo link ao professor.");
+      setBloqueioMensagem("Link inválido. Solicite um novo link ao professor.");
       return;
     }
     setBloqueioMensagem("");
@@ -1424,15 +1442,16 @@ function AlunoPage() {
   }, [provaId, token, deviceId]);
 
   useEffect(() => {
-    if (!logado || !nome || resultado) return;
+    if (!provaIniciada || !nome.trim()) return;
 
     const isEditableElement = (target) =>
       target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
 
     const bloquearAcesso = async (evento, detalhe) => {
+      if (!provaIniciada) return;
       if (securityEventLockRef.current) return;
       securityEventLockRef.current = true;
-      setBloqueioMensagem("A prova foi bloqueada por saÃ­da da aba, minimizaÃ§Ã£o ou redimensionamento suspeito.");
+      setBloqueioMensagem("A prova foi bloqueada por saída da aba, minimização ou redimensionamento suspeito.");
       setBloqueado(true);
       setLogado(false);
       try {
@@ -1461,26 +1480,28 @@ function AlunoPage() {
     const onBlur = () => {
       if (blurTimerId) window.clearTimeout(blurTimerId);
       blurTimerId = window.setTimeout(() => {
+        if (!provaIniciada) return;
         const paginaOculta = document.visibilityState === "hidden";
-        const janelaSemFoco = document.hasFocus && !document.hasFocus();
-        if (paginaOculta || janelaSemFoco) {
+        const janelaSemFoco = typeof document.hasFocus === "function" && !document.hasFocus();
+        if (paginaOculta || (janelaSemFoco && !houveInteracaoInternaRecente())) {
           bloquearAcesso("blur", "perda_de_foco_da_janela");
         }
-      }, 400);
+      }, 500);
     };
 
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
         if (visibilityTimerId) window.clearTimeout(visibilityTimerId);
         visibilityTimerId = window.setTimeout(() => {
-          if (document.visibilityState === "hidden") {
+          if (provaIniciada && document.visibilityState === "hidden") {
             bloquearAcesso("visibility_hidden", "aba_oculta_bloqueio");
           }
-        }, 400);
+        }, 500);
       }
     };
 
     const onResize = () => {
+      if (!provaIniciada) return;
       if (Date.now() - startedAt < 1000) return;
       if (isEditableElement(document.activeElement)) return;
       if (resizeTimerId) window.clearTimeout(resizeTimerId);
@@ -1506,16 +1527,16 @@ function AlunoPage() {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("resize", onResize);
     };
-  }, [logado, nome, provaId, resultado, token, deviceId]);
+  }, [provaIniciada, nome, provaId, token, deviceId]);
 
   useEffect(() => {
-    if (!logado || !nome || resultado || bloqueioMensagem) return;
+    if (!provaIniciada || !nome.trim() || bloqueioMensagem) return;
 
     const isEditable = (target) =>
       target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
 
     const registrarTentativaBloqueada = (detalhe) => {
-      setErro("AÃ§Ã£o bloqueada durante a prova.");
+      setErro("Ação bloqueada durante a prova.");
       api(`/api/aluno/provas/${provaId}/eventos`, {
         method: "POST",
         body: JSON.stringify({
@@ -1569,14 +1590,16 @@ function AlunoPage() {
       document.removeEventListener("selectstart", onSelectStart, true);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [logado, nome, resultado, bloqueioMensagem, provaId, token, deviceId]);
+  }, [provaIniciada, nome, bloqueioMensagem, provaId, token, deviceId]);
 
   async function entrar() {
+    marcarInteracaoInterna();
     if (acaoAluno) return;
     if (!nome.trim() || !numero.trim()) {
-      setErro("Preencha todos os campos obrigatÃ³rios.");
+      setErro("Preencha todos os campos obrigatórios.");
       return;
     }
+    loginEmAndamentoRef.current = true;
     setErro("");
     setAcaoAluno("entrar");
     try {
@@ -1594,13 +1617,18 @@ function AlunoPage() {
       setErro(getErrorMessage(e));
     } finally {
       setAcaoAluno("");
+      window.setTimeout(() => {
+        marcarInteracaoInterna();
+        loginEmAndamentoRef.current = false;
+      }, 800);
     }
   }
 
   async function enviar() {
+    marcarInteracaoInterna();
     if (enviarLockRef.current) return;
     if (!nome.trim()) {
-      setErro("Preencha todos os campos obrigatÃ³rios.");
+      setErro("Preencha todos os campos obrigatórios.");
       return;
     }
     enviarLockRef.current = true;
@@ -1625,7 +1653,7 @@ function AlunoPage() {
     return (
       <main className="page">
         <section className="card">
-          <h2>Acesso indisponÃ­vel</h2>
+          <h2>Acesso indisponível</h2>
           <p>{bloqueioMensagem}</p>
         </section>
       </main>
@@ -1647,7 +1675,13 @@ function AlunoPage() {
   }
 
   return (
-    <main className={`page ${logado ? "exam-screen" : ""}`}>
+    <main
+      className={`page ${logado ? "exam-screen" : ""}`}
+      onPointerDownCapture={marcarInteracaoInterna}
+      onKeyDownCapture={marcarInteracaoInterna}
+      onFocusCapture={marcarInteracaoInterna}
+      onWheelCapture={marcarInteracaoInterna}
+    >
       <h1>{prova.titulo}</h1>
       <p>{prova.materia}</p>
       {bloqueado ? (
