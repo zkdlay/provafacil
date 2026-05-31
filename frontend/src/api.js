@@ -80,3 +80,18 @@ export function criarTurma(payload, token) {
 export function excluirTurma(turmaId, token) {
   return api(`/api/turmas/${turmaId}`, { method: "DELETE" }, token);
 }
+
+export function listarAlunosAutorizadosProva(provaId, token) {
+  return api(`/api/provas/${provaId}/alunos-autorizados`, {}, token);
+}
+
+export function atualizarAlunosAutorizadosProva(provaId, alunosAutorizados, token) {
+  return api(
+    `/api/provas/${provaId}/alunos-autorizados`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ alunos_autorizados: alunosAutorizados }),
+    },
+    token
+  );
+}

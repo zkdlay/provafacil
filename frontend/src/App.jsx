@@ -1,6 +1,15 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import { Route, Routes, useLocation, useParams } from "react-router-dom";
-import { api, criarTurma, excluirTurma, getErrorMessage, listarAlunos, listarTurmas } from "./api";
+import {
+  api,
+  atualizarAlunosAutorizadosProva,
+  criarTurma,
+  excluirTurma,
+  getErrorMessage,
+  listarAlunos,
+  listarAlunosAutorizadosProva,
+  listarTurmas,
+} from "./api";
 
 const LETRAS = ["A", "B", "C", "D", "E"];
 const LINK_EXPIRATION_LABEL = "1 hora e 10 minutos";
@@ -820,6 +829,11 @@ function DashboardProfessor() {
   const [baixandoCsv, setBaixandoCsv] = useState(false);
   const [carregandoTurmas, setCarregandoTurmas] = useState(false);
   const [desbloqueandoAcessos, setDesbloqueandoAcessos] = useState([]);
+  const [editandoAlunosProvaId, setEditandoAlunosProvaId] = useState("");
+  const [alunosAutorizadosEdicao, setAlunosAutorizadosEdicao] = useState([]);
+  const [carregandoAutorizadosId, setCarregandoAutorizadosId] = useState("");
+  const [salvandoAutorizadosId, setSalvandoAutorizadosId] = useState("");
+  const [mensagemProvas, setMensagemProvas] = useState("");
   const deleteLockRef = useRef("");
   const resultadosRequestRef = useRef(0);
   const monitoramentoRequestRef = useRef(0);
@@ -927,6 +941,7 @@ function DashboardProfessor() {
     if (deleteLockRef.current) return;
     deleteLockRef.current = id;
     setErro("");
+    setMensagemProvas("");
     setExcluindoId(id);
     try {
       await api(`/api/provas/${id}`, { method: "DELETE" }, auth.token);
@@ -939,6 +954,9 @@ function DashboardProfessor() {
         setEstatisticasResultados(null);
         setMonitor([]);
         if (!updated?.length) setProvaSelecionada("");
+      }
+      if (editandoAlunosProvaId === id) {
+        cancelarEditorAlunos();
       }
     } catch (e) {
       setErro(getErrorMessage(e));
@@ -966,6 +984,7 @@ function DashboardProfessor() {
   async function renovarLink(id) {
     if (renovandoLinkId) return;
     setErro("");
+    setMensagemProvas("");
     setRenovandoLinkId(id);
     try {
       const data = await api(`/api/provas/${id}/link`, { method: "POST" }, auth.token);
@@ -989,6 +1008,89 @@ function DashboardProfessor() {
     }
   }
 
+  function toggleAlunoEdicao(alunoId, marcado) {
+    const id = Number(alunoId);
+    setAlunosAutorizadosEdicao((prev) => {
+      const selecionados = new Set(prev.map(Number));
+      if (marcado) {
+        selecionados.add(id);
+      } else {
+        selecionados.delete(id);
+      }
+      return Array.from(selecionados);
+    });
+  }
+
+  function toggleTurmaEdicao(turma, marcado) {
+    const idsTurma = (turma.alunos || []).map((aluno) => Number(aluno.id));
+    setAlunosAutorizadosEdicao((prev) => {
+      const selecionados = new Set(prev.map(Number));
+      idsTurma.forEach((id) => {
+        if (marcado) {
+          selecionados.add(id);
+        } else {
+          selecionados.delete(id);
+        }
+      });
+      return Array.from(selecionados);
+    });
+  }
+
+  function turmaTodaSelecionada(turma) {
+    const selecionados = new Set(alunosAutorizadosEdicao.map(Number));
+    const idsTurma = (turma.alunos || []).map((aluno) => Number(aluno.id));
+    return idsTurma.length > 0 && idsTurma.every((id) => selecionados.has(id));
+  }
+
+  async function abrirEditorAlunos(provaId) {
+    if (carregandoAutorizadosId || salvandoAutorizadosId) return;
+    setErro("");
+    setMensagemProvas("");
+    setEditandoAlunosProvaId(provaId);
+    setCarregandoAutorizadosId(provaId);
+    try {
+      if (!turmas.length) {
+        await carregarTurmas(auth.token);
+      }
+      const data = await listarAlunosAutorizadosProva(provaId, auth.token);
+      setAlunosAutorizadosEdicao((data.alunos_autorizados || []).map(Number));
+    } catch (e) {
+      setErro(getErrorMessage(e));
+      setEditandoAlunosProvaId("");
+      setAlunosAutorizadosEdicao([]);
+    } finally {
+      setCarregandoAutorizadosId("");
+    }
+  }
+
+  function cancelarEditorAlunos() {
+    if (salvandoAutorizadosId) return;
+    setEditandoAlunosProvaId("");
+    setAlunosAutorizadosEdicao([]);
+    setMensagemProvas("");
+  }
+
+  async function salvarEditorAlunos(provaId) {
+    if (salvandoAutorizadosId || carregandoAutorizadosId) return;
+    if (!alunosAutorizadosEdicao.length) {
+      setErro("Selecione pelo menos um aluno autorizado para esta prova.");
+      return;
+    }
+    setErro("");
+    setMensagemProvas("");
+    setSalvandoAutorizadosId(provaId);
+    try {
+      await atualizarAlunosAutorizadosProva(provaId, alunosAutorizadosEdicao, auth.token);
+      setMensagemProvas("Alunos autorizados atualizados com sucesso. O link da prova nao foi alterado.");
+      setEditandoAlunosProvaId("");
+      setAlunosAutorizadosEdicao([]);
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setSalvandoAutorizadosId("");
+    }
+  }
+
   async function desbloquearAluno(acessoId) {
     if (!acessoId || desbloqueandoAcessos.includes(acessoId)) return;
     setErro("");
@@ -1005,6 +1107,7 @@ function DashboardProfessor() {
             ? {
                 ...m,
                 status: "ativo",
+                pode_desbloquear: false,
                 ultimo_evento: "Aluno desbloqueado",
                 detalhe_ultimo: data?.acesso?.motivo_bloqueio || m.detalhe_ultimo,
               }
@@ -1076,8 +1179,11 @@ function DashboardProfessor() {
       {aba === "provas" ? (
         <section className="card">
           <h2>Minhas Provas</h2>
+          {mensagemProvas ? <p className="ok">{mensagemProvas}</p> : null}
           {provas.map((p) => {
             const link = p.token_acesso ? `${window.location.origin}/aluno/${p.id}?token=${p.token_acesso}` : "";
+            const editandoAlunos = editandoAlunosProvaId === p.id;
+            const selecionadosEdicao = new Set(alunosAutorizadosEdicao.map(Number));
             return (
               <article className="list-item" key={p.id}>
                 <strong>{p.titulo}</strong>
@@ -1091,10 +1197,83 @@ function DashboardProfessor() {
                   <button onClick={() => copiarLink(link, p.id)} disabled={Boolean(copiandoLinkId) || !link}>
                     {copiandoLinkId === p.id ? "Copiando..." : linkCopiadoId === p.id ? "Copiado" : "Copiar link"}
                   </button>
+                  <button
+                    className="secondary"
+                    onClick={() => abrirEditorAlunos(p.id)}
+                    disabled={Boolean(carregandoAutorizadosId) || Boolean(salvandoAutorizadosId)}
+                  >
+                    {carregandoAutorizadosId === p.id ? "Carregando..." : "Editar alunos autorizados"}
+                  </button>
                   <button className="danger" onClick={() => excluir(p.id)} disabled={Boolean(excluindoId)}>
                     {excluindoId === p.id ? "Excluindo..." : "Excluir"}
                   </button>
                 </div>
+                {editandoAlunos ? (
+                  <div className="authorized-editor">
+                    <div className="section-title-row compact">
+                      <div>
+                        <strong>Editar alunos autorizados</strong>
+                        <span>{alunosAutorizadosEdicao.length} aluno(s) selecionado(s)</span>
+                      </div>
+                    </div>
+                    {carregandoAutorizadosId === p.id ? (
+                      <p>Carregando alunos autorizados...</p>
+                    ) : turmas.length ? (
+                      <div className="student-picker compact-picker">
+                        {turmas.map((turma) => (
+                          <div className="turma-picker" key={turma.id}>
+                            <label className="check-row turma-check">
+                              <input
+                                type="checkbox"
+                                checked={turmaTodaSelecionada(turma)}
+                                disabled={salvandoAutorizadosId === p.id}
+                                onChange={(e) => toggleTurmaEdicao(turma, e.target.checked)}
+                              />
+                              Selecionar turma: {turma.nome}
+                            </label>
+                            <div className="student-checks">
+                              {(turma.alunos || []).map((aluno) => (
+                                <label className="check-row" key={aluno.id}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selecionadosEdicao.has(Number(aluno.id))}
+                                    disabled={salvandoAutorizadosId === p.id}
+                                    onChange={(e) => toggleAlunoEdicao(aluno.id, e.target.checked)}
+                                  />
+                                  {aluno.nome}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-note">Cadastre uma turma na aba Alunos antes de editar autorizados.</p>
+                    )}
+                    <div className="actions">
+                      <button
+                        onClick={() => salvarEditorAlunos(p.id)}
+                        disabled={
+                          salvandoAutorizadosId === p.id ||
+                          carregandoAutorizadosId === p.id ||
+                          !alunosAutorizadosEdicao.length
+                        }
+                      >
+                        {salvandoAutorizadosId === p.id ? "Salvando..." : "Salvar alteracoes"}
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={cancelarEditorAlunos}
+                        disabled={salvandoAutorizadosId === p.id}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                    <p className="empty-note">
+                      Alterar autorizados nao gera novo link e nao desbloqueia alunos automaticamente.
+                    </p>
+                  </div>
+                ) : null}
               </article>
             );
           })}
@@ -1181,10 +1360,14 @@ function DashboardProfessor() {
                     <td>{m.device_id || "-"}</td>
                     <td>{m.vezes_saiu}</td>
                     <td>{m.ultimo_evento}</td>
-                    <td>{m.detalhe_ultimo || "-"}</td>
+                    <td>
+                      {m.fraude_nome_nao_autorizado
+                        ? "Nome nao autorizado tentou acessar a prova."
+                        : m.detalhe_ultimo || "-"}
+                    </td>
                     <td>{m.data_hora_ultima}</td>
                     <td>
-                      {m.status === "bloqueado" && m.aluno_acesso_id ? (
+                      {m.status === "bloqueado" && m.aluno_acesso_id && m.pode_desbloquear ? (
                         <button
                           className="secondary"
                           onClick={() => desbloquearAluno(m.aluno_acesso_id)}

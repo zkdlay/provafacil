@@ -430,6 +430,29 @@ class Queries:
             conn.close()
 
     @staticmethod
+    def get_aluno_acesso_por_id(prova_id, acesso_id):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM aluno_acessos
+                    WHERE prova_id=%s
+                      AND id=%s
+                    LIMIT 1
+                    """,
+                    (prova_id, acesso_id),
+                )
+                row = cur.fetchone()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
     def bloquear_aluno_acesso(prova_id, token, nome_aluno, device_id, motivo):
         if not nome_aluno or not device_id:
             return False
@@ -745,6 +768,34 @@ class Queries:
                 )
                 row = cur.fetchone()
             return bool(row["tem_autorizados"]) if row else False
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_alunos_autorizados_prova(prova_id):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        a.id,
+                        a.nome,
+                        a.turma_id,
+                        t.nome AS turma_nome
+                    FROM prova_alunos_autorizados paa
+                    INNER JOIN alunos a ON a.id = paa.aluno_id
+                    INNER JOIN turmas t ON t.id = a.turma_id
+                    WHERE paa.prova_id=%s
+                    ORDER BY t.nome, a.nome
+                    """,
+                    (prova_id,),
+                )
+                rows = cur.fetchall()
+            return [dict(r) for r in rows]
         except Exception:
             conn.rollback()
             raise

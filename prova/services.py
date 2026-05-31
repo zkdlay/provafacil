@@ -77,6 +77,10 @@ class ProvaService:
         return Queries.get_aluno_acesso(prova_id, token, nome_aluno, device_id)
 
     @staticmethod
+    def buscar_aluno_acesso_por_id(prova_id, acesso_id):
+        return Queries.get_aluno_acesso_por_id(prova_id, acesso_id)
+
+    @staticmethod
     def bloquear_aluno_acesso(prova_id, token, nome_aluno, device_id, motivo):
         return Queries.bloquear_aluno_acesso(prova_id, token, nome_aluno, device_id, motivo)
 
@@ -131,6 +135,10 @@ class ProvaService:
     @staticmethod
     def salvar_alunos_autorizados(prova_id, aluno_ids):
         Queries.inserir_prova_alunos_autorizados(prova_id, aluno_ids)
+
+    @staticmethod
+    def listar_alunos_autorizados_prova(prova_id):
+        return Queries.get_alunos_autorizados_prova(prova_id)
 
     @staticmethod
     def prova_tem_alunos_autorizados(prova_id):

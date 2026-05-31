@@ -44,6 +44,10 @@ class ProvaCreatePayload(BaseModel):
     alunos_autorizados: Optional[List[int]] = None
 
 
+class AlunosAutorizadosPayload(BaseModel):
+    alunos_autorizados: List[int] = Field(default_factory=list)
+
+
 class TurmaCreatePayload(BaseModel):
     nome: str
     alunos: List[str] = Field(default_factory=list)
@@ -135,8 +139,23 @@ def validar_acesso_aluno(prova_id: str, token: Optional[str]):
 
 
 EVENTOS_BLOQUEIO_INDIVIDUAL = {"blur", "visibility_hidden", "resize_suspeito", "acesso_bloqueado"}
+MOTIVOS_DESBLOQUEIO_PERMITIDOS = {
+    "blur",
+    "visibility_hidden",
+    "resize_suspeito",
+    "acesso_bloqueado",
+    "perda_de_foco",
+    "saiu da aba",
+    "saiu_da_aba",
+    "aba_oculta",
+    "janela_redimensionada",
+    "minimiz",
+}
 MENSAGEM_ACESSO_INDIVIDUAL_BLOQUEADO = (
     "Sua prova foi bloqueada por atividade suspeita. Informe o professor."
+)
+MENSAGEM_FRAUDE_NOME_NAO_AUTORIZADO = (
+    "Nome nao autorizado tentou acessar a prova."
 )
 
 
@@ -154,6 +173,11 @@ def garantir_acesso_individual_ativo(prova_id: str, token: str, nome_aluno: str,
     if acesso and acesso.get("status") == "bloqueado":
         raise HTTPException(status_code=403, detail=MENSAGEM_ACESSO_INDIVIDUAL_BLOQUEADO)
     return acesso
+
+
+def motivo_permite_desbloqueio(motivo: Optional[str]):
+    texto = (motivo or "").lower()
+    return any(motivo_permitido in texto for motivo_permitido in MOTIVOS_DESBLOQUEIO_PERMITIDOS)
 
 
 @app.get("/api/config")
@@ -304,6 +328,42 @@ def atualizar_prova(
     return {"ok": True}
 
 
+@app.get("/api/provas/{prova_id}/alunos-autorizados")
+def listar_alunos_autorizados_prova(
+    prova_id: str,
+    x_auth_token: Optional[str] = Header(default=None),
+):
+    validar_posse_prova(prova_id, x_auth_token)
+    alunos = ProvaService.listar_alunos_autorizados_prova(prova_id)
+    return {
+        "alunos_autorizados": [aluno["id"] for aluno in alunos],
+        "alunos": alunos,
+    }
+
+
+@app.put("/api/provas/{prova_id}/alunos-autorizados")
+def atualizar_alunos_autorizados_prova(
+    prova_id: str,
+    payload: AlunosAutorizadosPayload,
+    x_auth_token: Optional[str] = Header(default=None),
+):
+    validar_posse_prova(prova_id, x_auth_token)
+    user = get_user_from_token(x_auth_token)
+    aluno_ids = payload.alunos_autorizados or []
+    if not aluno_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Selecione pelo menos um aluno autorizado para esta prova.",
+        )
+    if not ProvaService.alunos_pertencem_usuario(user["usuario_id"], aluno_ids):
+        raise HTTPException(
+            status_code=403,
+            detail="A lista de alunos autorizados contem alunos invalidos.",
+        )
+    ProvaService.salvar_alunos_autorizados(prova_id, aluno_ids)
+    return {"ok": True, "message": "Alunos autorizados atualizados com sucesso."}
+
+
 @app.delete("/api/provas/{prova_id}")
 def excluir_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=None)):
     validar_posse_prova(prova_id, x_auth_token)
@@ -396,6 +456,10 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
                 "detalhe_ultimo": "",
                 "device_id": "-",
                 "data_hora_ultima": "-",
+                "aluno_acesso_id": None,
+                "aluno_autorizado": False,
+                "pode_desbloquear": False,
+                "fraude_nome_nao_autorizado": False,
             }
         aluno = estado[nome]
         tipo = ev["evento"]
@@ -416,7 +480,11 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
             aluno["ultimo_evento"] = "Tentativa bloqueada"
         elif tipo == "fraude_nome_nao_autorizado":
             aluno["status"] = "fraude"
-            aluno["ultimo_evento"] = "Fraude: nome nao autorizado"
+            aluno["ultimo_evento"] = MENSAGEM_FRAUDE_NOME_NAO_AUTORIZADO
+            aluno["detalhe_ultimo"] = MENSAGEM_FRAUDE_NOME_NAO_AUTORIZADO
+            aluno["aluno_autorizado"] = False
+            aluno["pode_desbloquear"] = False
+            aluno["fraude_nome_nao_autorizado"] = True
         elif tipo == "aluno_desbloqueado":
             aluno["status"] = "ativo"
             aluno["ultimo_evento"] = "Aluno desbloqueado"
@@ -426,7 +494,8 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
         elif tipo == "submit":
             aluno["status"] = "finalizou"
             aluno["ultimo_evento"] = "Enviou prova"
-        aluno["detalhe_ultimo"] = detalhe
+        if tipo != "fraude_nome_nao_autorizado":
+            aluno["detalhe_ultimo"] = detalhe
         aluno["data_hora_ultima"] = ev["timestamp"]
 
     estado_final: Dict[str, Dict[str, Any]] = {}
@@ -450,16 +519,33 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
                     "detalhe_ultimo": "",
                     "device_id": "-",
                     "data_hora_ultima": "-",
+                    "aluno_acesso_id": None,
+                    "aluno_autorizado": False,
+                    "pode_desbloquear": False,
+                    "fraude_nome_nao_autorizado": False,
                 },
             )
         }
         status = acesso.get("status") or item["status"]
+        motivo_bloqueio = acesso.get("motivo_bloqueio") or ""
+        autorizado = bool(ProvaService.aluno_autorizado_prova(prova_id, nome))
+        motivo_desbloqueavel = motivo_permite_desbloqueio(motivo_bloqueio)
         item["aluno_acesso_id"] = acesso.get("id")
+        item["aluno_autorizado"] = autorizado
+        item["pode_desbloquear"] = status == "bloqueado" and autorizado and motivo_desbloqueavel
+        item["fraude_nome_nao_autorizado"] = (
+            bool(item.get("fraude_nome_nao_autorizado")) and not autorizado
+        )
         item["status"] = status
         item["device_id"] = device_id
         if status == "bloqueado":
-            item["ultimo_evento"] = "Aluno/dispositivo bloqueado"
-            item["detalhe_ultimo"] = acesso.get("motivo_bloqueio") or item["detalhe_ultimo"]
+            if not autorizado:
+                item["ultimo_evento"] = MENSAGEM_FRAUDE_NOME_NAO_AUTORIZADO
+                item["detalhe_ultimo"] = MENSAGEM_FRAUDE_NOME_NAO_AUTORIZADO
+                item["fraude_nome_nao_autorizado"] = True
+            else:
+                item["ultimo_evento"] = "Aluno/dispositivo bloqueado"
+                item["detalhe_ultimo"] = motivo_bloqueio or item["detalhe_ultimo"]
         elif status == "finalizado":
             item["ultimo_evento"] = "Enviou prova"
         elif status == "ativo" and item["ultimo_evento"] == "-":
@@ -474,6 +560,7 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
                 **item,
                 "aluno_acesso_id": None,
                 "device_id": item.get("device_id") or "-",
+                "pode_desbloquear": False,
             }
 
     return {"alunos": list(estado_final.values())}
@@ -486,6 +573,23 @@ def desbloquear_aluno_monitoramento(
     x_auth_token: Optional[str] = Header(default=None),
 ):
     validar_posse_prova(prova_id, x_auth_token)
+    acesso_atual = ProvaService.buscar_aluno_acesso_por_id(prova_id, acesso_id)
+    if not acesso_atual:
+        raise HTTPException(status_code=404, detail="Acesso bloqueado nao encontrado.")
+    if acesso_atual.get("status") != "bloqueado":
+        raise HTTPException(status_code=400, detail="Este aluno/dispositivo nao esta bloqueado.")
+    nome_acesso = acesso_atual.get("nome_aluno") or acesso_atual.get("nome_normalizado") or ""
+    if not ProvaService.aluno_autorizado_prova(prova_id, nome_acesso):
+        raise HTTPException(
+            status_code=403,
+            detail="Este aluno nao esta autorizado para esta prova e nao pode ser desbloqueado.",
+        )
+    if not motivo_permite_desbloqueio(acesso_atual.get("motivo_bloqueio")):
+        raise HTTPException(
+            status_code=403,
+            detail="Este bloqueio nao pode ser desbloqueado pelo monitoramento.",
+        )
+
     acesso = ProvaService.desbloquear_aluno_acesso(prova_id, acesso_id)
     if not acesso:
         raise HTTPException(status_code=404, detail="Acesso bloqueado nao encontrado.")
@@ -541,16 +645,15 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
     device_id = validar_device_id(payload.device_id)
     if not nome or not numero:
         raise HTTPException(status_code=400, detail="Preencha nome e numero")
-    garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
     requer_autorizacao = int(prova.get("requer_alunos_autorizados") or 0) == 1
     if requer_autorizacao and not ProvaService.aluno_autorizado_prova(prova_id, nome):
         detalhe = f"Nome informado nao esta na lista de alunos autorizados: {nome}"
         registrar_evento(prova_id, nome, "fraude_nome_nao_autorizado", detalhe)
-        ProvaService.bloquear_aluno_acesso(prova_id, payload.token, nome, device_id, detalhe)
         raise HTTPException(
             status_code=403,
             detail="Fraude detectada: seu nome nao esta autorizado para esta prova.",
         )
+    garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
         prova = ProvaService.buscar_prova(prova_id)
         questoes = json.loads(prova["questoes"])
@@ -584,6 +687,9 @@ def aluno_evento(prova_id: str, payload: EventoPayload):
     device_id = (payload.device_id or "").strip()
     registrar_evento(prova_id, nome, payload.evento, payload.detalhe)
     if payload.evento in EVENTOS_BLOQUEIO_INDIVIDUAL and nome and device_id:
+        requer_autorizacao = int(prova.get("requer_alunos_autorizados") or 0) == 1
+        if requer_autorizacao and not ProvaService.aluno_autorizado_prova(prova_id, nome):
+            return {"ok": True}
         ProvaService.criar_ou_atualizar_aluno_acesso(prova_id, payload.token, nome, device_id)
         ProvaService.bloquear_aluno_acesso(
             prova_id,
@@ -605,16 +711,15 @@ def responder_prova(prova_id: str, payload: RespostaPayload):
     device_id = validar_device_id(payload.device_id)
     if not nome:
         raise HTTPException(status_code=400, detail="Preencha todos os campos obrigatorios.")
-    garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
     requer_autorizacao = int(prova.get("requer_alunos_autorizados") or 0) == 1
     if requer_autorizacao and not ProvaService.aluno_autorizado_prova(prova_id, nome):
         detalhe = f"Nome informado nao esta na lista de alunos autorizados: {nome}"
         registrar_evento(prova_id, nome, "fraude_nome_nao_autorizado", detalhe)
-        ProvaService.bloquear_aluno_acesso(prova_id, payload.token, nome, device_id, detalhe)
         raise HTTPException(
             status_code=403,
             detail="Fraude detectada: seu nome nao esta autorizado para esta prova.",
         )
+    garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
         raise HTTPException(status_code=400, detail="Aluno ja respondeu esta prova")
     questoes = json.loads(prova["questoes"])

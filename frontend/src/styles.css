@@ -293,7 +293,8 @@ label { display: block; }
 }
 
 .student-picker,
-.turma-form {
+.turma-form,
+.authorized-editor {
   margin: 12px 0;
   padding: 14px;
   border: 1px solid var(--line);
@@ -301,8 +302,20 @@ label { display: block; }
   background: #f8fafc;
 }
 
+.authorized-editor {
+  border-color: #cfe1f3;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef8f6 100%);
+}
+
 .student-picker h3 {
   margin: 0 0 10px;
+}
+
+.compact-picker {
+  margin: 10px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .turma-picker {
