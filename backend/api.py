@@ -180,6 +180,18 @@ def motivo_permite_desbloqueio(motivo: Optional[str]):
     return any(motivo_permitido in texto for motivo_permitido in MOTIVOS_DESBLOQUEIO_PERMITIDOS)
 
 
+def aluno_tem_evento_desbloqueavel_recente(prova_id: str, nome_aluno: str):
+    nome_referencia = normalizar_nome(nome_aluno)
+    if not nome_referencia:
+        return False
+
+    for evento in reversed(obter_eventos_prova(prova_id)):
+        if normalizar_nome(evento.get("nome_aluno") or "") != nome_referencia:
+            continue
+        return evento.get("evento") in EVENTOS_BLOQUEIO_INDIVIDUAL
+    return False
+
+
 @app.get("/api/config")
 def config():
     return {"materias_padrao": MATERIAS_PADRAO}
@@ -460,6 +472,7 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
                 "aluno_autorizado": False,
                 "pode_desbloquear": False,
                 "fraude_nome_nao_autorizado": False,
+                "evento_desbloqueavel": False,
             }
         aluno = estado[nome]
         tipo = ev["evento"]
@@ -467,15 +480,22 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
         if tipo == "login":
             aluno["status"] = "online"
             aluno["ultimo_evento"] = "Login"
+            aluno["evento_desbloqueavel"] = False
             if "chamada" in detalhe.lower() and ":" in detalhe:
                 aluno["chamada"] = detalhe.split(":")[-1].strip()
         elif tipo in ("blur", "visibility_hidden"):
             aluno["status"] = "fora_da_aba"
             aluno["vezes_saiu"] += 1
             aluno["ultimo_evento"] = "Saiu da aba"
+            aluno["evento_desbloqueavel"] = True
         elif tipo == "resize_suspeito":
             aluno["status"] = "fora_da_aba"
             aluno["ultimo_evento"] = "Resize suspeito"
+            aluno["evento_desbloqueavel"] = True
+        elif tipo == "acesso_bloqueado":
+            aluno["status"] = "fora_da_aba"
+            aluno["ultimo_evento"] = "Acesso bloqueado"
+            aluno["evento_desbloqueavel"] = True
         elif tipo == "tentativa_bloqueada":
             aluno["ultimo_evento"] = "Tentativa bloqueada"
         elif tipo == "fraude_nome_nao_autorizado":
@@ -485,15 +505,18 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
             aluno["aluno_autorizado"] = False
             aluno["pode_desbloquear"] = False
             aluno["fraude_nome_nao_autorizado"] = True
+            aluno["evento_desbloqueavel"] = False
         elif tipo == "aluno_desbloqueado":
             aluno["status"] = "ativo"
             aluno["ultimo_evento"] = "Aluno desbloqueado"
+            aluno["evento_desbloqueavel"] = False
         elif tipo == "focus":
             aluno["status"] = "online"
             aluno["ultimo_evento"] = "Voltou para aba"
         elif tipo == "submit":
             aluno["status"] = "finalizou"
             aluno["ultimo_evento"] = "Enviou prova"
+            aluno["evento_desbloqueavel"] = False
         if tipo != "fraude_nome_nao_autorizado":
             aluno["detalhe_ultimo"] = detalhe
         aluno["data_hora_ultima"] = ev["timestamp"]
@@ -507,6 +530,9 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
             continue
         nomes_com_acesso.add(nome)
         device_id = acesso.get("device_id") or "-"
+        chave_estado = f"{nome}::{device_id}"
+        if chave_estado in estado_final:
+            continue
         item = {
             **estado.get(
                 nome,
@@ -523,6 +549,7 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
                     "aluno_autorizado": False,
                     "pode_desbloquear": False,
                     "fraude_nome_nao_autorizado": False,
+                    "evento_desbloqueavel": False,
                 },
             )
         }
@@ -530,9 +557,12 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
         motivo_bloqueio = acesso.get("motivo_bloqueio") or ""
         autorizado = bool(ProvaService.aluno_autorizado_prova(prova_id, nome))
         motivo_desbloqueavel = motivo_permite_desbloqueio(motivo_bloqueio)
+        evento_desbloqueavel = not motivo_bloqueio and bool(item.get("evento_desbloqueavel"))
         item["aluno_acesso_id"] = acesso.get("id")
         item["aluno_autorizado"] = autorizado
-        item["pode_desbloquear"] = status == "bloqueado" and autorizado and motivo_desbloqueavel
+        item["pode_desbloquear"] = (
+            status == "bloqueado" and autorizado and (motivo_desbloqueavel or evento_desbloqueavel)
+        )
         item["fraude_nome_nao_autorizado"] = (
             bool(item.get("fraude_nome_nao_autorizado")) and not autorizado
         )
@@ -552,7 +582,7 @@ def monitoramento_prova(prova_id: str, x_auth_token: Optional[str] = Header(defa
             item["ultimo_evento"] = "Acesso ativo"
         if acesso.get("ultimo_evento_em"):
             item["data_hora_ultima"] = acesso["ultimo_evento_em"]
-        estado_final[f"{nome}::{device_id}"] = item
+        estado_final[chave_estado] = item
 
     for nome, item in estado.items():
         if nome not in nomes_com_acesso:
@@ -584,7 +614,11 @@ def desbloquear_aluno_monitoramento(
             status_code=403,
             detail="Este aluno nao esta autorizado para esta prova e nao pode ser desbloqueado.",
         )
-    if not motivo_permite_desbloqueio(acesso_atual.get("motivo_bloqueio")):
+    motivo_atual = acesso_atual.get("motivo_bloqueio") or ""
+    motivo_ou_evento_desbloqueavel = motivo_permite_desbloqueio(
+        motivo_atual
+    ) or (not motivo_atual and aluno_tem_evento_desbloqueavel_recente(prova_id, nome_acesso))
+    if not motivo_ou_evento_desbloqueavel:
         raise HTTPException(
             status_code=403,
             detail="Este bloqueio nao pode ser desbloqueado pelo monitoramento.",

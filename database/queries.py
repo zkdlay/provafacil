@@ -467,7 +467,7 @@ class Queries:
                     UPDATE aluno_acessos
                     SET status='bloqueado',
                         motivo_bloqueio=%s,
-                        bloqueado_em=COALESCE(bloqueado_em, %s),
+                        bloqueado_em=%s,
                         ultimo_evento_em=%s
                     WHERE prova_id=%s
                       AND token=%s
