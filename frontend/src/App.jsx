@@ -194,11 +194,8 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
   const [provaCriadaId, setProvaCriadaId] = useState("");
   const [linkGerado, setLinkGerado] = useState("");
   const [linkExpiraEm, setLinkExpiraEm] = useState("");
-  const [copiado, setCopiado] = useState(false);
   const [loadingGerarLink, setLoadingGerarLink] = useState(false);
-  const [loadingCopiarLink, setLoadingCopiarLink] = useState(false);
   const gerarLinkLockRef = useRef(false);
-  const copiarLinkLockRef = useRef(false);
 
   useEffect(() => {
     api("/api/config").then((d) => setMaterias(d.materias_padrao || [])).catch(() => {});
@@ -210,7 +207,6 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
 
   function resetarCriacaoProva() {
     gerarLinkLockRef.current = false;
-    copiarLinkLockRef.current = false;
     setConfig(configInicial);
     setEtapaCriacao(1);
     setQuestoes([]);
@@ -219,9 +215,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     setProvaCriadaId("");
     setLinkGerado("");
     setLinkExpiraEm("");
-    setCopiado(false);
     setLoadingGerarLink(false);
-    setLoadingCopiarLink(false);
   }
 
   function toggleAlunoAutorizado(alunoId, marcado) {
@@ -422,29 +416,12 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
       setProvaCriadaId(created.id);
       setLinkGerado(`${window.location.origin}/aluno/${created.id}?token=${created.token}`);
       setLinkExpiraEm(created.expira_em || "");
-      setCopiado(false);
       await onCreated();
     } catch (e) {
       gerarLinkLockRef.current = false;
       setErro(getErrorMessage(e));
     } finally {
       setLoadingGerarLink(false);
-    }
-  }
-
-  async function copiarLink(link) {
-    if (copiarLinkLockRef.current || !link) return;
-    copiarLinkLockRef.current = true;
-    setLoadingCopiarLink(true);
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiado(true);
-      setTimeout(() => setCopiado(false), 1200);
-    } catch {
-      setErro("Nao foi possivel copiar o link.");
-    } finally {
-      copiarLinkLockRef.current = false;
-      setLoadingCopiarLink(false);
     }
   }
 
@@ -616,15 +593,12 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
             </div>
           ) : (
             <div className="link-box">
-              <p>Link da prova criada:</p>
-              <input readOnly value={linkGerado} />
+              <p>Prova criada e link gerado com sucesso.</p>
+              <p>Para copiar o link, acesse a aba Minhas Provas.</p>
               <p>Link valido por {LINK_EXPIRATION_LABEL}.</p>
               {linkExpiraEm ? <p>Expira em {new Date(linkExpiraEm).toLocaleString()}.</p> : null}
               <div className="actions">
-                <button onClick={() => copiarLink(linkGerado)} disabled={loadingCopiarLink}>
-                  {loadingCopiarLink ? "Copiando..." : copiado ? "Copiado" : "Copiar link"}
-                </button>
-                <button className="secondary" onClick={resetarCriacaoProva}>
+                <button onClick={resetarCriacaoProva}>
                   OK / Concluir
                 </button>
               </div>
