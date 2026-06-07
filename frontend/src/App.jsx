@@ -204,6 +204,43 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
   const alunosSelecionadosSet = new Set(alunosSelecionados.map(Number));
   const totalQuestoes = Number(config.qtd) || 0;
   const totalOpcoes = Number(config.qtdOp) || 0;
+  const quantidadeOpcoes = totalOpcoes || 4;
+
+  function opcoesNormalizadas(q = {}) {
+    const base = Array.isArray(q.opcoes) ? q.opcoes : [];
+    return Array.from({ length: quantidadeOpcoes }).map((_, i) => base[i] || "");
+  }
+
+  function imagensOpcoesNormalizadas(q = {}) {
+    const base = Array.isArray(q.imagens_opcoes) ? q.imagens_opcoes : [];
+    return Array.from({ length: quantidadeOpcoes }).map((_, i) => base[i] || null);
+  }
+
+  function normalizarQuestaoPorTipo(q = {}, tipo = "multipla_escolha") {
+    const comum = {
+      tipo,
+      enunciado: q.enunciado || "",
+      imagem: q.imagem || null,
+    };
+
+    if (tipo === "texto") {
+      return {
+        ...comum,
+        opcoes: [],
+        imagens_opcoes: [],
+        gabarito: "",
+        gabarito_texto: q.gabarito_texto || "",
+      };
+    }
+
+    return {
+      ...comum,
+      opcoes: opcoesNormalizadas(q),
+      imagens_opcoes: imagensOpcoesNormalizadas(q),
+      gabarito: LETRAS.slice(0, quantidadeOpcoes).includes(q.gabarito) ? q.gabarito : "",
+      gabarito_texto: "",
+    };
+  }
 
   function resetarCriacaoProva() {
     gerarLinkLockRef.current = false;
@@ -265,17 +302,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
   function prepararQuestaoExistente(q = {}) {
     const tipoBase = config.modo === "texto" ? "texto" : "multipla_escolha";
     const tipo = config.modo === "misto" ? q.tipo || "multipla_escolha" : tipoBase;
-    const opcoes = Array.from({ length: totalOpcoes }).map((_, i) => q.opcoes?.[i] || "");
-    const imagensOpcoes = Array.from({ length: totalOpcoes }).map((_, i) => q.imagens_opcoes?.[i] || null);
-    return {
-      tipo,
-      enunciado: q.enunciado || "",
-      imagem: q.imagem || null,
-      opcoes: tipo === "texto" ? [] : opcoes,
-      imagens_opcoes: tipo === "texto" ? [] : imagensOpcoes,
-      gabarito: LETRAS.slice(0, totalOpcoes).includes(q.gabarito) ? q.gabarito : "A",
-      gabarito_texto: q.gabarito_texto || "",
-    };
+    return normalizarQuestaoPorTipo(q, tipo);
   }
 
   function irParaQuestoes() {
@@ -294,12 +321,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     setQuestoes((prev) =>
       prev.map((q, i) => {
         if (i !== idx) return q;
-        if (tipo === "texto") {
-          return { ...q, tipo, opcoes: [], imagens_opcoes: [] };
-        }
-        const opcoes = Array.from({ length: totalOpcoes }).map((_, j) => q.opcoes?.[j] || "");
-        const imagensOpcoes = Array.from({ length: totalOpcoes }).map((_, j) => q.imagens_opcoes?.[j] || null);
-        return { ...q, tipo, opcoes, imagens_opcoes, gabarito: q.gabarito || "A" };
+        return normalizarQuestaoPorTipo(q, tipo);
       })
     );
   }
@@ -308,7 +330,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     setQuestoes((prev) =>
       prev.map((q, i) => {
         if (i !== qIdx) return q;
-        const op = [...q.opcoes];
+        const op = opcoesNormalizadas(q);
         op[opIdx] = val;
         return { ...q, opcoes: op };
       })
@@ -319,7 +341,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     setQuestoes((prev) =>
       prev.map((q, i) => {
         if (i !== qIdx) return q;
-        const imgs = [...q.imagens_opcoes];
+        const imgs = imagensOpcoesNormalizadas(q);
         imgs[opIdx] = base64;
         return { ...q, imagens_opcoes: imgs };
       })
@@ -342,9 +364,17 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
           setErro(`Preencha o gabarito textual da questao ${i + 1}.`);
           return false;
         }
-      } else if ((q.opcoes || []).slice(0, totalOpcoes).some((op) => !String(op || "").trim())) {
-        setErro(`Preencha todas as alternativas da questao ${i + 1}.`);
-        return false;
+      } else {
+        const opcoes = opcoesNormalizadas(q);
+        const gabaritosPermitidos = LETRAS.slice(0, opcoes.length);
+        if (opcoes.some((op) => !String(op || "").trim())) {
+          setErro(`Preencha todas as alternativas da questao ${i + 1}.`);
+          return false;
+        }
+        if (!gabaritosPermitidos.includes(q.gabarito)) {
+          setErro(`Selecione o gabarito da questao ${i + 1}.`);
+          return false;
+        }
       }
     }
     setErro("");
@@ -381,8 +411,8 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
         tipo: "multipla_escolha",
         enunciado: q.enunciado,
         imagem: q.imagem,
-        opcoes: q.opcoes,
-        imagens_opcoes: q.imagens_opcoes,
+        opcoes: opcoesNormalizadas(q),
+        imagens_opcoes: imagensOpcoesNormalizadas(q),
         gabarito: q.gabarito,
       };
     });
@@ -477,56 +507,66 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
       {etapaCriacao === 2 ? (
         <div className="wizard-panel">
           <h3>Questoes</h3>
-          {questoes.map((q, i) => (
-            <article key={i} className="list-item question-card">
-              <strong>Questao {i + 1}</strong>
-              <textarea rows={2} placeholder="Enunciado" value={q.enunciado} onChange={(e) => atualizarQuestao(i, { enunciado: e.target.value })} />
-              <label>Imagem da questao (opcional)</label>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/jpg"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const base64 = await toBase64(file);
-                  atualizarQuestao(i, { imagem: base64 });
-                }}
-              />
-              {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
-              {config.modo === "misto" ? (
-                <select value={q.tipo} onChange={(e) => atualizarTipoQuestao(i, e.target.value)}>
-                  <option value="multipla_escolha">Multipla escolha</option>
-                  <option value="texto">Texto</option>
-                </select>
-              ) : null}
-              {q.tipo === "texto" ? (
-                <input placeholder="Gabarito textual" value={q.gabarito_texto || ""} onChange={(e) => atualizarQuestao(i, { gabarito_texto: e.target.value, opcoes: [], imagens_opcoes: [] })} />
-              ) : (
-                <>
-                  {q.opcoes.map((op, j) => (
-                    <div key={j} className="opcao-box">
-                      <input placeholder={`Opcao ${LETRAS[j]}`} value={op} onChange={(e) => atualizarOpcao(i, j, e.target.value)} />
-                      <label>Imagem opcao {LETRAS[j]} (opcional)</label>
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/jpg"
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const base64 = await toBase64(file);
-                          atualizarImagemOpcao(i, j, base64);
-                        }}
-                      />
-                      {q.imagens_opcoes?.[j] ? <img className="preview" src={dataUri(q.imagens_opcoes[j])} alt={`Opcao ${LETRAS[j]}`} /> : null}
-                    </div>
-                  ))}
-                  <select value={q.gabarito} onChange={(e) => atualizarQuestao(i, { gabarito: e.target.value })}>
-                    {LETRAS.slice(0, totalOpcoes).map((l) => <option key={l} value={l}>{l}</option>)}
+          {questoes.map((q, i) => {
+            const opcoes = opcoesNormalizadas(q);
+            const imagensOpcoes = imagensOpcoesNormalizadas(q);
+            const letrasDisponiveis = LETRAS.slice(0, opcoes.length);
+            return (
+              <article key={i} className="list-item question-card">
+                <strong>Questao {i + 1}</strong>
+                <textarea rows={2} placeholder="Enunciado" value={q.enunciado || ""} onChange={(e) => atualizarQuestao(i, { enunciado: e.target.value })} />
+                <label>Imagem da questao (opcional)</label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/jpg"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const base64 = await toBase64(file);
+                    atualizarQuestao(i, { imagem: base64 });
+                  }}
+                />
+                {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
+                {config.modo === "misto" ? (
+                  <select value={q.tipo || "multipla_escolha"} onChange={(e) => atualizarTipoQuestao(i, e.target.value)}>
+                    <option value="multipla_escolha">Multipla escolha</option>
+                    <option value="texto">Texto</option>
                   </select>
-                </>
-              )}
-            </article>
-          ))}
+                ) : null}
+                {q.tipo === "texto" ? (
+                  <input
+                    placeholder="Gabarito textual"
+                    value={q.gabarito_texto || ""}
+                    onChange={(e) => atualizarQuestao(i, { gabarito_texto: e.target.value, opcoes: [], imagens_opcoes: [], gabarito: "" })}
+                  />
+                ) : (
+                  <>
+                    {opcoes.map((op, j) => (
+                      <div key={j} className="opcao-box">
+                        <input placeholder={`Opcao ${LETRAS[j]}`} value={op} onChange={(e) => atualizarOpcao(i, j, e.target.value)} />
+                        <label>Imagem opcao {LETRAS[j]} (opcional)</label>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/jpg"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const base64 = await toBase64(file);
+                            atualizarImagemOpcao(i, j, base64);
+                          }}
+                        />
+                        {imagensOpcoes[j] ? <img className="preview" src={dataUri(imagensOpcoes[j])} alt={`Opcao ${LETRAS[j]}`} /> : null}
+                      </div>
+                    ))}
+                    <select value={q.gabarito || ""} onChange={(e) => atualizarQuestao(i, { gabarito: e.target.value })}>
+                      <option value="">Selecione o gabarito</option>
+                      {letrasDisponiveis.map((l) => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                  </>
+                )}
+              </article>
+            );
+          })}
           <div className="actions wizard-actions">
             <button className="secondary" onClick={() => setEtapaCriacao(1)}>Voltar</button>
             <button onClick={irParaAlunos}>Proximo</button>
@@ -1676,36 +1716,40 @@ function AlunoPage() {
         </section>
       ) : (
         <section className="card">
-          {prova.questoes.map((q, i) => (
-            <article key={i} className="list-item">
-              <strong>Questao {i + 1}</strong>
-              <p>{q.enunciado}</p>
-              {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
-              {q.tipo === "texto" ? (
-                <input onChange={(e) => setRespostas((p) => ({ ...p, [`q${i}`]: e.target.value }))} />
-              ) : (
-                q.opcoes.map((op, j) => {
-                  const letra = LETRAS[j];
-                  const inputId = `q_${i}_${letra}`;
-                  return (
-                    <label className="alternative-option" htmlFor={inputId} key={letra}>
-                      <input
-                        id={inputId}
-                        type="radio"
-                        name={`q_${i}`}
-                        checked={respostas[`q${i}`] === letra}
-                        onChange={() => setRespostas((p) => ({ ...p, [`q${i}`]: letra }))}
-                      />
-                      <span className="alternative-content">
-                        <span className="alternative-text">{letra}) {op}</span>
-                        {q.imagens_opcoes?.[j] ? <img className="preview" src={dataUri(q.imagens_opcoes[j])} alt={`Opcao ${letra}`} /> : null}
-                      </span>
-                    </label>
-                  );
-                })
-              )}
-            </article>
-          ))}
+          {prova.questoes.map((q, i) => {
+            const opcoes = Array.isArray(q.opcoes) && q.opcoes.length ? q.opcoes : ["", "", "", ""];
+            const imagensOpcoes = Array.isArray(q.imagens_opcoes) ? q.imagens_opcoes : [];
+            return (
+              <article key={i} className="list-item">
+                <strong>Questao {i + 1}</strong>
+                <p>{q.enunciado}</p>
+                {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
+                {q.tipo === "texto" ? (
+                  <input onChange={(e) => setRespostas((p) => ({ ...p, [`q${i}`]: e.target.value }))} />
+                ) : (
+                  opcoes.map((op, j) => {
+                    const letra = LETRAS[j];
+                    const inputId = `q_${i}_${letra}`;
+                    return (
+                      <label className="alternative-option" htmlFor={inputId} key={letra}>
+                        <input
+                          id={inputId}
+                          type="radio"
+                          name={`q_${i}`}
+                          checked={respostas[`q${i}`] === letra}
+                          onChange={() => setRespostas((p) => ({ ...p, [`q${i}`]: letra }))}
+                        />
+                        <span className="alternative-content">
+                          <span className="alternative-text">{letra}) {op}</span>
+                          {imagensOpcoes[j] ? <img className="preview" src={dataUri(imagensOpcoes[j])} alt={`Opcao ${letra}`} /> : null}
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </article>
+            );
+          })}
           <button onClick={enviar} disabled={Boolean(acaoAluno)}>
             {acaoAluno === "enviar" ? "Enviando..." : "Enviar prova"}
           </button>
