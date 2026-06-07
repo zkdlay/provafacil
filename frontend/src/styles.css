@@ -447,6 +447,53 @@ label { display: block; }
 .excel-table tbody tr:hover { background: #f1f7ff; }
 .excel-table tbody tr.fraud-row { background: #fff1f2; }
 .excel-table tbody tr.fraud-row:hover { background: #ffe4e6; }
+.excel-table tbody tr.details-row,
+.excel-table tbody tr.details-row:hover {
+  background: #f8fafc;
+}
+
+.answer-panel {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, #ffffff 0%, #eef8f6 100%);
+}
+
+.answer-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.answer-card {
+  padding: 12px;
+  border: 1px solid #dbe5f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.answer-line {
+  margin: 6px 0 0;
+}
+
+.answer-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.answer-status.correct {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.answer-status.incorrect {
+  color: #991b1b;
+  background: #fee2e2;
+}
 
 @keyframes fadeSlide {
   from { opacity: 0; transform: translateY(4px); }

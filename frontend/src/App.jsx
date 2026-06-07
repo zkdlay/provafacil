@@ -834,6 +834,7 @@ function DashboardProfessor() {
   const [estatisticasResultados, setEstatisticasResultados] = useState(null);
   const [monitor, setMonitor] = useState([]);
   const [erro, setErro] = useState("");
+  const [respostasAbertasId, setRespostasAbertasId] = useState("");
   const [carregandoResultados, setCarregandoResultados] = useState(false);
   const [carregandoMonitoramento, setCarregandoMonitoramento] = useState(false);
   const [excluindoId, setExcluindoId] = useState("");
@@ -908,6 +909,7 @@ function DashboardProfessor() {
           if (resultadosRequestRef.current !== requestId || provaSelecionada !== currentProvaId) return;
           setResultados(d.resultados || []);
           setEstatisticasResultados(d.estatisticas || null);
+          setRespostasAbertasId("");
         })
         .catch((e) => {
           if (resultadosRequestRef.current !== requestId) return;
@@ -966,6 +968,7 @@ function DashboardProfessor() {
       if (wasSelected) {
         setResultados([]);
         setEstatisticasResultados(null);
+        setRespostasAbertasId("");
         setMonitor([]);
         if (!updated?.length) setProvaSelecionada("");
       }
@@ -1325,20 +1328,90 @@ function DashboardProfessor() {
                   <th>Acessos</th>
                   <th>Saidas aba</th>
                   <th>Data/Hora</th>
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
-                {resultados.map((r, i) => (
-                  <tr key={i}>
-                    <td>{r.nome_aluno}</td>
-                    <td>{r.numero_aluno}</td>
-                    <td>{r.nota}</td>
-                    <td>{r.acertos}/{r.total}</td>
-                    <td>{r.acessos}</td>
-                    <td>{r.saidas_aba}</td>
-                    <td>{r.respondida_em}</td>
-                  </tr>
-                ))}
+                {resultados.map((r, i) => {
+                  const detalheId = `${r.nome_aluno}-${r.respondida_em}-${i}`;
+                  const aberto = respostasAbertasId === detalheId;
+                  return [
+                    <tr key={`${detalheId}-linha`}>
+                      <td>{r.nome_aluno}</td>
+                      <td>{r.numero_aluno}</td>
+                      <td>{r.nota}</td>
+                      <td>{r.acertos}/{r.total}</td>
+                      <td>{r.acessos}</td>
+                      <td>{r.saidas_aba}</td>
+                      <td>{r.respondida_em}</td>
+                      <td>
+                        <button
+                          className="secondary"
+                          onClick={() => setRespostasAbertasId(aberto ? "" : detalheId)}
+                        >
+                          {aberto ? "Fechar" : "Ver respostas"}
+                        </button>
+                      </td>
+                    </tr>,
+                    aberto ? (
+                      <tr key={`${detalheId}-detalhes`} className="details-row">
+                        <td colSpan={8}>
+                          <div className="answer-panel">
+                            <div className="section-title-row compact">
+                              <div>
+                                <strong>Respostas de {r.nome_aluno}</strong>
+                                <span>Nota {r.nota} - {r.acertos}/{r.total} acertos</span>
+                              </div>
+                              <button className="secondary" onClick={() => setRespostasAbertasId("")}>Fechar</button>
+                            </div>
+                            {(r.respostas || []).length ? (
+                              <div className="answer-list">
+                                {(r.respostas || []).map((resp) => {
+                                  const numero = Number(resp.indice) + 1;
+                                  const acertou = Boolean(resp.correta);
+                                  return (
+                                    <article className="answer-card" key={resp.indice}>
+                                      <div className="section-title-row compact">
+                                        <div>
+                                          <strong>Questao {numero}</strong>
+                                          <span>{resp.tipo === "texto" ? "Texto" : "Multipla escolha"}</span>
+                                        </div>
+                                        <span className={`answer-status ${acertou ? "correct" : "incorrect"}`}>
+                                          {acertou ? "Acertou" : "Errou"}
+                                        </span>
+                                      </div>
+                                      <p>{resp.enunciado || "-"}</p>
+                                      {resp.imagem ? <img className="preview" src={dataUri(resp.imagem)} alt={`Questao ${numero}`} /> : null}
+                                      {resp.tipo === "texto" ? (
+                                        <>
+                                          <p className="answer-line"><strong>Resposta do aluno:</strong> {resp.resposta_aluno || "-"}</p>
+                                          <p className="answer-line"><strong>Gabarito esperado:</strong> {resp.gabarito || "-"}</p>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <p className="answer-line">
+                                            <strong>Resposta do aluno:</strong> {resp.resposta_aluno || "-"}
+                                            {resp.resposta_texto ? ` - ${resp.resposta_texto}` : ""}
+                                          </p>
+                                          <p className="answer-line">
+                                            <strong>Alternativa correta:</strong> {resp.gabarito || "-"}
+                                            {resp.gabarito_texto ? ` - ${resp.gabarito_texto}` : ""}
+                                          </p>
+                                        </>
+                                      )}
+                                    </article>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="empty-note">Nenhuma resposta detalhada encontrada para este aluno.</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null,
+                  ];
+                })}
               </tbody>
             </table>
           </div>

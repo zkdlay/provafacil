@@ -418,6 +418,50 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
         resps = json.loads(r["respostas"])
         acertos = ProvaService.contar_acertos(questoes, resps)
         ev = eventos_por_aluno.get(r["nome_aluno"], {})
+        detalhes_respostas = []
+        for idx, questao in enumerate(questoes):
+            tipo = questao.get("tipo", "multipla_escolha")
+            resposta_aluno = resps.get(f"q{idx}")
+            if tipo == "texto":
+                gabarito = questao.get("gabarito_texto", "")
+                correta = ProvaService._normalizar_texto(resposta_aluno) == ProvaService._normalizar_texto(gabarito)
+                detalhes_respostas.append(
+                    {
+                        "indice": idx,
+                        "tipo": "texto",
+                        "enunciado": questao.get("enunciado", ""),
+                        "imagem": questao.get("imagem"),
+                        "resposta_aluno": resposta_aluno or "",
+                        "gabarito": gabarito,
+                        "correta": correta,
+                    }
+                )
+            else:
+                opcoes = questao.get("opcoes") if isinstance(questao.get("opcoes"), list) else []
+                gabarito = questao.get("gabarito", "")
+                detalhes_respostas.append(
+                    {
+                        "indice": idx,
+                        "tipo": "multipla_escolha",
+                        "enunciado": questao.get("enunciado", ""),
+                        "imagem": questao.get("imagem"),
+                        "opcoes": opcoes,
+                        "imagens_opcoes": questao.get("imagens_opcoes", []),
+                        "resposta_aluno": resposta_aluno or "",
+                        "resposta_texto": opcoes[ord(resposta_aluno) - ord("A")]
+                        if isinstance(resposta_aluno, str)
+                        and len(resposta_aluno) == 1
+                        and 0 <= ord(resposta_aluno) - ord("A") < len(opcoes)
+                        else "",
+                        "gabarito": gabarito,
+                        "gabarito_texto": opcoes[ord(gabarito) - ord("A")]
+                        if isinstance(gabarito, str)
+                        and len(gabarito) == 1
+                        and 0 <= ord(gabarito) - ord("A") < len(opcoes)
+                        else "",
+                        "correta": resposta_aluno == gabarito,
+                    }
+                )
         notas.append(float(r["nota"]))
         dados.append(
             {
@@ -430,6 +474,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
                 "acessos": ev.get("acessos", 0),
                 "saidas_aba": ev.get("saidas_aba", 0),
                 "eventos_total": ev.get("eventos_total", 0),
+                "respostas": detalhes_respostas,
             }
         )
     media = round(sum(notas) / len(notas), 1) if notas else 0.0
