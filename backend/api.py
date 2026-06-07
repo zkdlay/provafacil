@@ -500,6 +500,8 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
     for r in respostas:
         resps = json.loads(r["respostas"])
         acertos = ProvaService.contar_acertos(questoes, resps)
+        total_questoes = len(questoes)
+        nota_recalculada = ProvaService.calcular_nota_por_acertos(acertos, total_questoes)
         ev = eventos_por_aluno.get(r["nome_aluno"], {})
         detalhes_respostas = []
         for idx, questao in enumerate(questoes):
@@ -545,14 +547,14 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
                         "correta": resposta_aluno == gabarito,
                     }
                 )
-        notas.append(float(r["nota"]))
+        notas.append(float(nota_recalculada))
         dados.append(
             {
                 "nome_aluno": r["nome_aluno"],
                 "numero_aluno": ev.get("numero_aluno", "-"),
-                "nota": r["nota"],
+                "nota": nota_recalculada,
                 "acertos": acertos,
-                "total": len(questoes),
+                "total": total_questoes,
                 "respondida_em": r["respondida_em"],
                 "acessos": ev.get("acessos", 0),
                 "saidas_aba": ev.get("saidas_aba", 0),

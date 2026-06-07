@@ -378,6 +378,10 @@ class ProvaService:
     def calcular_nota(questoes, respostas_aluno):
         total = len(questoes)
         acertos = ProvaService.contar_acertos(questoes, respostas_aluno)
+        return ProvaService.calcular_nota_por_acertos(acertos, total)
+
+    @staticmethod
+    def calcular_nota_por_acertos(acertos, total):
         if total <= 0:
             return 0
-        return round((acertos / total) * 10, 1)
+        return round((acertos / total) * 10, 2)
