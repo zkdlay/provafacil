@@ -3,14 +3,15 @@ import { Route, Routes, useLocation, useParams } from "react-router-dom";
 import {
   api,
   atualizarAlunosAutorizadosProva,
-  atualizarGabaritoProva,
-  buscarGabaritoProva,
+  buscarProvaAlteracao,
   criarTurma,
   excluirTurma,
+  excluirTentativaProva,
   getErrorMessage,
   listarAlunos,
   listarAlunosAutorizadosProva,
   listarTurmas,
+  salvarProvaAlteracao,
 } from "./api";
 
 const LETRAS = ["A", "B", "C", "D", "E"];
@@ -186,7 +187,14 @@ function AuthProfessor({ onLogin }) {
 }
 
 function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
-  const configInicial = { materia: "", titulo: "", qtd: 5, modo: "multipla_escolha", qtdOp: 4 };
+  const configInicial = {
+    materia: "",
+    titulo: "",
+    qtd: 5,
+    modo: "multipla_escolha",
+    qtdOp: 4,
+    embaralhar: false,
+  };
   const [config, setConfig] = useState(configInicial);
   const [etapaCriacao, setEtapaCriacao] = useState(1);
   const [questoes, setQuestoes] = useState([]);
@@ -441,6 +449,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
             titulo: config.titulo,
             questoes: montarQuestoesPayload(),
             alunos_autorizados: alunosSelecionados,
+            embaralhar_questoes: Boolean(config.embaralhar),
           }),
         },
         token
@@ -500,6 +509,14 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
               <input type="number" min="2" max="5" value={config.qtdOp} onChange={(e) => setConfig((c) => ({ ...c, qtdOp: e.target.value }))} />
             </>
           ) : null}
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={Boolean(config.embaralhar)}
+              onChange={(e) => setConfig((c) => ({ ...c, embaralhar: e.target.checked }))}
+            />
+            Embaralhar questoes automaticamente
+          </label>
           <div className="actions wizard-actions">
             <button onClick={irParaQuestoes}>Proximo</button>
           </div>
@@ -850,11 +867,14 @@ function DashboardProfessor() {
   const [alunosAutorizadosEdicao, setAlunosAutorizadosEdicao] = useState([]);
   const [carregandoAutorizadosId, setCarregandoAutorizadosId] = useState("");
   const [salvandoAutorizadosId, setSalvandoAutorizadosId] = useState("");
-  const [editandoGabaritoProvaId, setEditandoGabaritoProvaId] = useState("");
-  const [questoesGabaritoEdicao, setQuestoesGabaritoEdicao] = useState([]);
-  const [carregandoGabaritoId, setCarregandoGabaritoId] = useState("");
-  const [salvandoGabaritoId, setSalvandoGabaritoId] = useState("");
+  const [alterandoProvaId, setAlterandoProvaId] = useState("");
+  const [questoesAlteracao, setQuestoesAlteracao] = useState([]);
+  const [embaralharAlteracao, setEmbaralharAlteracao] = useState(false);
+  const [carregandoAlteracaoId, setCarregandoAlteracaoId] = useState("");
+  const [salvandoAlteracaoId, setSalvandoAlteracaoId] = useState("");
   const [mensagemProvas, setMensagemProvas] = useState("");
+  const [mensagemResultados, setMensagemResultados] = useState("");
+  const [excluindoTentativaId, setExcluindoTentativaId] = useState("");
   const deleteLockRef = useRef("");
   const resultadosRequestRef = useRef(0);
   const monitoramentoRequestRef = useRef(0);
@@ -981,8 +1001,8 @@ function DashboardProfessor() {
       if (editandoAlunosProvaId === id) {
         cancelarEditorAlunos();
       }
-      if (editandoGabaritoProvaId === id) {
-        cancelarEditorGabarito();
+      if (alterandoProvaId === id) {
+        cancelarAlteracaoProva();
       }
     } catch (e) {
       setErro(getErrorMessage(e));
@@ -1072,8 +1092,8 @@ function DashboardProfessor() {
     if (carregandoAutorizadosId || salvandoAutorizadosId) return;
     setErro("");
     setMensagemProvas("");
-    setEditandoGabaritoProvaId("");
-    setQuestoesGabaritoEdicao([]);
+    setAlterandoProvaId("");
+    setQuestoesAlteracao([]);
     setEditandoAlunosProvaId(provaId);
     setCarregandoAutorizadosId(provaId);
     try {
@@ -1119,44 +1139,238 @@ function DashboardProfessor() {
     }
   }
 
-  async function abrirEditorGabarito(provaId) {
-    if (carregandoGabaritoId || salvandoGabaritoId) return;
+  function novaQuestaoAlteracao(tipo = "multipla_escolha") {
+    const id = `tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    if (tipo === "texto") {
+      return {
+        id,
+        tipo: "texto",
+        enunciado: "",
+        imagem: null,
+        opcoes: [],
+        imagens_opcoes: [],
+        gabarito: "",
+        gabarito_texto: "",
+      };
+    }
+    return {
+      id,
+      tipo: "multipla_escolha",
+      enunciado: "",
+      imagem: null,
+      opcoes: ["", "", "", ""],
+      imagens_opcoes: [null, null, null, null],
+      gabarito: "",
+      gabarito_texto: "",
+    };
+  }
+
+  function opcoesAlteracao(q = {}) {
+    const opcoes = Array.isArray(q.opcoes) && q.opcoes.length ? q.opcoes : ["", "", "", ""];
+    return opcoes.slice(0, 5);
+  }
+
+  function imagensOpcoesAlteracao(q = {}) {
+    const opcoes = opcoesAlteracao(q);
+    const imagens = Array.isArray(q.imagens_opcoes) ? q.imagens_opcoes : [];
+    return opcoes.map((_, indice) => imagens[indice] || null);
+  }
+
+  function normalizarQuestaoAlteracao(q = {}, tipoDesejado = q.tipo || "multipla_escolha") {
+    const tipo = tipoDesejado === "texto" ? "texto" : "multipla_escolha";
+    const comum = {
+      id: q.id || `tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      tipo,
+      enunciado: q.enunciado || "",
+      imagem: q.imagem || null,
+    };
+    if (tipo === "texto") {
+      return {
+        ...comum,
+        opcoes: [],
+        imagens_opcoes: [],
+        gabarito: "",
+        gabarito_texto: q.gabarito_texto || "",
+      };
+    }
+    const opcoes = opcoesAlteracao(q);
+    const imagens = imagensOpcoesAlteracao(q);
+    return {
+      ...comum,
+      opcoes,
+      imagens_opcoes: imagens,
+      gabarito: LETRAS.slice(0, opcoes.length).includes(q.gabarito) ? q.gabarito : "",
+      gabarito_texto: "",
+    };
+  }
+
+  async function abrirAlteracaoProva(provaId) {
+    if (carregandoAlteracaoId || salvandoAlteracaoId) return;
     setErro("");
     setMensagemProvas("");
     setEditandoAlunosProvaId("");
     setAlunosAutorizadosEdicao([]);
-    setEditandoGabaritoProvaId(provaId);
-    setQuestoesGabaritoEdicao([]);
-    setCarregandoGabaritoId(provaId);
+    setAlterandoProvaId(provaId);
+    setQuestoesAlteracao([]);
+    setCarregandoAlteracaoId(provaId);
     try {
-      const data = await buscarGabaritoProva(provaId, auth.token);
-      setQuestoesGabaritoEdicao(data.questoes || []);
+      const data = await buscarProvaAlteracao(provaId, auth.token);
+      setQuestoesAlteracao((data.questoes || []).map((q) => normalizarQuestaoAlteracao(q)));
+      setEmbaralharAlteracao(Boolean(data.prova?.embaralhar_questoes));
     } catch (e) {
       setErro(getErrorMessage(e));
-      setEditandoGabaritoProvaId("");
-      setQuestoesGabaritoEdicao([]);
+      setAlterandoProvaId("");
+      setQuestoesAlteracao([]);
     } finally {
-      setCarregandoGabaritoId("");
+      setCarregandoAlteracaoId("");
     }
   }
 
-  function cancelarEditorGabarito() {
-    if (salvandoGabaritoId) return;
-    setEditandoGabaritoProvaId("");
-    setQuestoesGabaritoEdicao([]);
+  function cancelarAlteracaoProva() {
+    if (salvandoAlteracaoId) return;
+    setAlterandoProvaId("");
+    setQuestoesAlteracao([]);
+    setEmbaralharAlteracao(false);
     setMensagemProvas("");
   }
 
-  function atualizarGabaritoQuestao(indice, campos) {
-    setQuestoesGabaritoEdicao((prev) =>
+  function atualizarQuestaoAlteracao(indice, campos) {
+    setQuestoesAlteracao((prev) =>
       prev.map((questao, atual) => (atual === indice ? { ...questao, ...campos } : questao))
     );
   }
 
-  function validarGabaritoEdicao() {
-    for (let indice = 0; indice < questoesGabaritoEdicao.length; indice += 1) {
-      const questao = questoesGabaritoEdicao[indice] || {};
+  function alterarTipoQuestaoAlteracao(indice, tipo) {
+    setQuestoesAlteracao((prev) =>
+      prev.map((questao, atual) =>
+        atual === indice ? normalizarQuestaoAlteracao(questao, tipo) : questao
+      )
+    );
+  }
+
+  function atualizarOpcaoAlteracao(qIdx, opIdx, valor) {
+    setQuestoesAlteracao((prev) =>
+      prev.map((questao, atual) => {
+        if (atual !== qIdx) return questao;
+        const opcoes = opcoesAlteracao(questao);
+        opcoes[opIdx] = valor;
+        return { ...questao, opcoes };
+      })
+    );
+  }
+
+  function atualizarImagemOpcaoAlteracao(qIdx, opIdx, base64) {
+    setQuestoesAlteracao((prev) =>
+      prev.map((questao, atual) => {
+        if (atual !== qIdx) return questao;
+        const imagens = imagensOpcoesAlteracao(questao);
+        imagens[opIdx] = base64;
+        return { ...questao, imagens_opcoes: imagens };
+      })
+    );
+  }
+
+  function adicionarAlternativaAlteracao(qIdx) {
+    setQuestoesAlteracao((prev) =>
+      prev.map((questao, atual) => {
+        if (atual !== qIdx) return questao;
+        const opcoes = opcoesAlteracao(questao);
+        if (opcoes.length >= 5) return questao;
+        return {
+          ...questao,
+          opcoes: [...opcoes, ""],
+          imagens_opcoes: [...imagensOpcoesAlteracao(questao), null],
+        };
+      })
+    );
+  }
+
+  function removerAlternativaAlteracao(qIdx, opIdx) {
+    setQuestoesAlteracao((prev) =>
+      prev.map((questao, atual) => {
+        if (atual !== qIdx) return questao;
+        const opcoes = opcoesAlteracao(questao);
+        if (opcoes.length <= 2) return questao;
+        const imagens = imagensOpcoesAlteracao(questao);
+        const gabaritoIdx = LETRAS.indexOf(questao.gabarito);
+        const novoGabarito =
+          gabaritoIdx === opIdx
+            ? ""
+            : gabaritoIdx > opIdx
+              ? LETRAS[gabaritoIdx - 1]
+              : questao.gabarito;
+        return {
+          ...questao,
+          opcoes: opcoes.filter((_, indice) => indice !== opIdx),
+          imagens_opcoes: imagens.filter((_, indice) => indice !== opIdx),
+          gabarito: novoGabarito,
+        };
+      })
+    );
+  }
+
+  function moverAlternativaAlteracao(qIdx, opIdx, direcao) {
+    setQuestoesAlteracao((prev) =>
+      prev.map((questao, atual) => {
+        if (atual !== qIdx) return questao;
+        const destino = opIdx + direcao;
+        const opcoes = opcoesAlteracao(questao);
+        if (destino < 0 || destino >= opcoes.length) return questao;
+        const imagens = imagensOpcoesAlteracao(questao);
+        [opcoes[opIdx], opcoes[destino]] = [opcoes[destino], opcoes[opIdx]];
+        [imagens[opIdx], imagens[destino]] = [imagens[destino], imagens[opIdx]];
+        let gabarito = questao.gabarito;
+        if (gabarito === LETRAS[opIdx]) gabarito = LETRAS[destino];
+        else if (gabarito === LETRAS[destino]) gabarito = LETRAS[opIdx];
+        return { ...questao, opcoes, imagens_opcoes: imagens, gabarito };
+      })
+    );
+  }
+
+  function adicionarQuestaoAlteracao(tipo = "multipla_escolha") {
+    setQuestoesAlteracao((prev) => [...prev, novaQuestaoAlteracao(tipo)]);
+  }
+
+  function duplicarQuestaoAlteracao(indice) {
+    setQuestoesAlteracao((prev) => {
+      const original = prev[indice];
+      const copia = {
+        ...JSON.parse(JSON.stringify(original)),
+        id: `tmp_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      };
+      return [...prev.slice(0, indice + 1), copia, ...prev.slice(indice + 1)];
+    });
+  }
+
+  function excluirQuestaoAlteracao(indice) {
+    setQuestoesAlteracao((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, atual) => atual !== indice);
+    });
+  }
+
+  function moverQuestaoAlteracao(indice, direcao) {
+    setQuestoesAlteracao((prev) => {
+      const destino = indice + direcao;
+      if (destino < 0 || destino >= prev.length) return prev;
+      const copia = [...prev];
+      [copia[indice], copia[destino]] = [copia[destino], copia[indice]];
+      return copia;
+    });
+  }
+
+  function validarAlteracaoProva() {
+    if (!questoesAlteracao.length) {
+      setErro("Adicione pelo menos uma questao.");
+      return false;
+    }
+    for (let indice = 0; indice < questoesAlteracao.length; indice += 1) {
+      const questao = questoesAlteracao[indice] || {};
       const tipo = questao.tipo === "texto" ? "texto" : "multipla_escolha";
+      if (!String(questao.enunciado || "").trim()) {
+        setErro(`Preencha o enunciado da questao ${indice + 1}.`);
+        return false;
+      }
       if (tipo === "texto") {
         if (!String(questao.gabarito_texto || "").trim()) {
           setErro(`Preencha o gabarito textual da questao ${indice + 1}.`);
@@ -1164,10 +1378,13 @@ function DashboardProfessor() {
         }
         continue;
       }
-
-      const opcoes = Array.isArray(questao.opcoes) ? questao.opcoes : [];
+      const opcoes = opcoesAlteracao(questao);
       const letrasValidas = LETRAS.slice(0, opcoes.length);
-      if (!letrasValidas.length || !letrasValidas.includes(String(questao.gabarito || "").toUpperCase())) {
+      if (opcoes.length < 2 || opcoes.length > 5 || opcoes.some((opcao) => !String(opcao || "").trim())) {
+        setErro(`Preencha entre 2 e 5 alternativas na questao ${indice + 1}.`);
+        return false;
+      }
+      if (!letrasValidas.includes(String(questao.gabarito || "").toUpperCase())) {
         setErro(`Selecione um gabarito valido para a questao ${indice + 1}.`);
         return false;
       }
@@ -1175,26 +1392,61 @@ function DashboardProfessor() {
     return true;
   }
 
-  async function salvarEditorGabarito(provaId) {
-    if (salvandoGabaritoId || carregandoGabaritoId) return;
-    if (!validarGabaritoEdicao()) return;
+  function montarQuestoesAlteracaoPayload() {
+    return questoesAlteracao.map((questao) => {
+      if (questao.tipo === "texto") {
+        return {
+          id: questao.id,
+          tipo: "texto",
+          enunciado: questao.enunciado,
+          imagem: questao.imagem || null,
+          opcoes: [],
+          imagens_opcoes: [],
+          gabarito: "",
+          gabarito_texto: questao.gabarito_texto || "",
+        };
+      }
+      return {
+        id: questao.id,
+        tipo: "multipla_escolha",
+        enunciado: questao.enunciado,
+        imagem: questao.imagem || null,
+        opcoes: opcoesAlteracao(questao),
+        imagens_opcoes: imagensOpcoesAlteracao(questao),
+        gabarito: String(questao.gabarito || "").toUpperCase(),
+        gabarito_texto: "",
+      };
+    });
+  }
+
+  async function salvarAlteracaoProvaAtual(provaId) {
+    if (salvandoAlteracaoId || carregandoAlteracaoId) return;
+    if (!validarAlteracaoProva()) return;
 
     setErro("");
     setMensagemProvas("");
-    setSalvandoGabaritoId(provaId);
+    setSalvandoAlteracaoId(provaId);
     try {
-      const data = await atualizarGabaritoProva(provaId, questoesGabaritoEdicao, auth.token);
-      setMensagemProvas(data?.message || "Gabarito atualizado e notas recalculadas.");
-      setEditandoGabaritoProvaId("");
-      setQuestoesGabaritoEdicao([]);
+      const data = await salvarProvaAlteracao(
+        provaId,
+        {
+          questoes: montarQuestoesAlteracaoPayload(),
+          embaralhar_questoes: Boolean(embaralharAlteracao),
+        },
+        auth.token
+      );
+      setMensagemProvas(data?.message || "Prova alterada e notas recalculadas.");
+      setAlterandoProvaId("");
+      setQuestoesAlteracao([]);
       setResultados([]);
       setEstatisticasResultados(null);
       setRespostasAbertasId("");
       resultadosRequestRef.current += 1;
+      await carregarProvas(auth.token, provaSelecionada);
     } catch (e) {
       setErro(getErrorMessage(e));
     } finally {
-      setSalvandoGabaritoId("");
+      setSalvandoAlteracaoId("");
     }
   }
 
@@ -1249,6 +1501,30 @@ function DashboardProfessor() {
     }
   }
 
+  async function excluirTentativa(resultado) {
+    if (!resultado?.id || excluindoTentativaId) return;
+    const confirmar = window.confirm(
+      `Excluir a tentativa de ${resultado.nome_aluno}? O aluno podera responder novamente se nao estiver bloqueado.`
+    );
+    if (!confirmar) return;
+
+    setErro("");
+    setMensagemResultados("");
+    setExcluindoTentativaId(resultado.id);
+    try {
+      await excluirTentativaProva(provaSelecionada, resultado.id, auth.token);
+      const data = await api(`/api/provas/${provaSelecionada}/resultados`, {}, auth.token);
+      setResultados(data.resultados || []);
+      setEstatisticasResultados(data.estatisticas || null);
+      setRespostasAbertasId("");
+      setMensagemResultados("Tentativa excluida. O aluno podera responder novamente se nao estiver bloqueado.");
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setExcluindoTentativaId("");
+    }
+  }
+
   if (!auth) return <AuthProfessor onLogin={setAuth} />;
 
   return (
@@ -1290,7 +1566,7 @@ function DashboardProfessor() {
           {provas.map((p) => {
             const link = p.token_acesso ? `${window.location.origin}/aluno/${p.id}?token=${p.token_acesso}` : "";
             const editandoAlunos = editandoAlunosProvaId === p.id;
-            const editandoGabarito = editandoGabaritoProvaId === p.id;
+            const alterandoProva = alterandoProvaId === p.id;
             const selecionadosEdicao = new Set(alunosAutorizadosEdicao.map(Number));
             return (
               <article className="list-item" key={p.id}>
@@ -1314,10 +1590,10 @@ function DashboardProfessor() {
                   </button>
                   <button
                     className="secondary"
-                    onClick={() => abrirEditorGabarito(p.id)}
-                    disabled={Boolean(carregandoGabaritoId) || Boolean(salvandoGabaritoId)}
+                    onClick={() => abrirAlteracaoProva(p.id)}
+                    disabled={Boolean(carregandoAlteracaoId) || Boolean(salvandoAlteracaoId)}
                   >
-                    {carregandoGabaritoId === p.id ? "Carregando..." : "Editar gabarito"}
+                    {carregandoAlteracaoId === p.id ? "Carregando..." : "Alterar prova"}
                   </button>
                   <button className="danger" onClick={() => excluir(p.id)} disabled={Boolean(excluindoId)}>
                     {excluindoId === p.id ? "Excluindo..." : "Excluir"}
@@ -1389,21 +1665,48 @@ function DashboardProfessor() {
                     </p>
                   </div>
                 ) : null}
-                {editandoGabarito ? (
-                  <div className="answer-key-editor">
+                {alterandoProva ? (
+                  <div className="exam-editor">
                     <div className="section-title-row compact">
                       <div>
-                        <strong>Editar gabarito</strong>
-                        <span>Altere apenas as respostas esperadas desta prova.</span>
+                        <strong>Alterar prova</strong>
+                        <span>Edite questoes, alternativas, imagens, gabaritos e embaralhamento.</span>
                       </div>
                     </div>
-                    {carregandoGabaritoId === p.id ? (
-                      <p>Carregando gabarito...</p>
+                    {carregandoAlteracaoId === p.id ? (
+                      <p>Carregando prova...</p>
                     ) : (
-                      <div className="answer-key-list">
-                        {questoesGabaritoEdicao.map((questao, indice) => {
+                      <>
+                        <label className="check-row shuffle-toggle">
+                          <input
+                            type="checkbox"
+                            checked={embaralharAlteracao}
+                            disabled={salvandoAlteracaoId === p.id}
+                            onChange={(e) => setEmbaralharAlteracao(e.target.checked)}
+                          />
+                          Embaralhar questoes automaticamente para cada aluno
+                        </label>
+                        <div className="actions">
+                          <button
+                            className="secondary"
+                            onClick={() => adicionarQuestaoAlteracao("multipla_escolha")}
+                            disabled={salvandoAlteracaoId === p.id}
+                          >
+                            Adicionar multipla escolha
+                          </button>
+                          <button
+                            className="secondary"
+                            onClick={() => adicionarQuestaoAlteracao("texto")}
+                            disabled={salvandoAlteracaoId === p.id}
+                          >
+                            Adicionar texto
+                          </button>
+                        </div>
+                        <div className="answer-key-list">
+                        {questoesAlteracao.map((questao, indice) => {
                           const tipo = questao.tipo === "texto" ? "texto" : "multipla_escolha";
-                          const opcoes = Array.isArray(questao.opcoes) ? questao.opcoes : [];
+                          const opcoes = opcoesAlteracao(questao);
+                          const imagens = imagensOpcoesAlteracao(questao);
                           return (
                             <article className="answer-key-card" key={indice}>
                               <div className="section-title-row compact">
@@ -1411,23 +1714,54 @@ function DashboardProfessor() {
                                   <strong>Questao {indice + 1}</strong>
                                   <span>{tipo === "texto" ? "Texto" : "Multipla escolha"}</span>
                                 </div>
+                                <div className="actions compact-actions">
+                                  <button className="secondary" onClick={() => moverQuestaoAlteracao(indice, -1)} disabled={salvandoAlteracaoId === p.id || indice === 0}>Subir</button>
+                                  <button className="secondary" onClick={() => moverQuestaoAlteracao(indice, 1)} disabled={salvandoAlteracaoId === p.id || indice === questoesAlteracao.length - 1}>Descer</button>
+                                  <button className="secondary" onClick={() => duplicarQuestaoAlteracao(indice)} disabled={salvandoAlteracaoId === p.id}>Duplicar</button>
+                                  <button className="danger" onClick={() => excluirQuestaoAlteracao(indice)} disabled={salvandoAlteracaoId === p.id || questoesAlteracao.length <= 1}>Excluir</button>
+                                </div>
                               </div>
-                              <p>{questao.enunciado || "-"}</p>
+                              <select
+                                value={tipo}
+                                disabled={salvandoAlteracaoId === p.id}
+                                onChange={(e) => alterarTipoQuestaoAlteracao(indice, e.target.value)}
+                              >
+                                <option value="multipla_escolha">Multipla escolha</option>
+                                <option value="texto">Texto</option>
+                              </select>
+                              <textarea
+                                rows={2}
+                                placeholder="Enunciado"
+                                value={questao.enunciado || ""}
+                                disabled={salvandoAlteracaoId === p.id}
+                                onChange={(e) => atualizarQuestaoAlteracao(indice, { enunciado: e.target.value })}
+                              />
+                              <label>Imagem da questao</label>
+                              <input
+                                type="file"
+                                accept="image/png,image/jpeg,image/jpg"
+                                disabled={salvandoAlteracaoId === p.id}
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const base64 = await toBase64(file);
+                                  atualizarQuestaoAlteracao(indice, { imagem: base64 });
+                                }}
+                              />
                               {questao.imagem ? (
-                                <img
-                                  className="preview"
-                                  src={dataUri(questao.imagem)}
-                                  alt={`Questao ${indice + 1}`}
-                                />
+                                <div>
+                                  <img className="preview" src={dataUri(questao.imagem)} alt={`Questao ${indice + 1}`} />
+                                  <button className="secondary" onClick={() => atualizarQuestaoAlteracao(indice, { imagem: null })} disabled={salvandoAlteracaoId === p.id}>Remover imagem</button>
+                                </div>
                               ) : null}
                               {tipo === "texto" ? (
                                 <label>
                                   Gabarito esperado
                                   <input
                                     value={questao.gabarito_texto || ""}
-                                    disabled={salvandoGabaritoId === p.id}
+                                    disabled={salvandoAlteracaoId === p.id}
                                     onChange={(e) =>
-                                      atualizarGabaritoQuestao(indice, { gabarito_texto: e.target.value })
+                                      atualizarQuestaoAlteracao(indice, { gabarito_texto: e.target.value })
                                     }
                                   />
                                 </label>
@@ -1436,18 +1770,46 @@ function DashboardProfessor() {
                                   {opcoes.map((opcao, opcaoIndice) => {
                                     const letra = LETRAS[opcaoIndice];
                                     return (
-                                      <label className="check-row" key={`${indice}-${letra}`}>
+                                      <div className="opcao-box option-editor-row" key={`${indice}-${letra}`}>
+                                        <label className="check-row">
+                                          <input
+                                            type="radio"
+                                            name={`gabarito-${p.id}-${indice}`}
+                                            checked={questao.gabarito === letra}
+                                            disabled={salvandoAlteracaoId === p.id}
+                                            onChange={() => atualizarQuestaoAlteracao(indice, { gabarito: letra })}
+                                          />
+                                          Gabarito {letra}
+                                        </label>
                                         <input
-                                          type="radio"
-                                          name={`gabarito-${p.id}-${indice}`}
-                                          checked={questao.gabarito === letra}
-                                          disabled={salvandoGabaritoId === p.id}
-                                          onChange={() => atualizarGabaritoQuestao(indice, { gabarito: letra })}
+                                          placeholder={`Alternativa ${letra}`}
+                                          value={opcao || ""}
+                                          disabled={salvandoAlteracaoId === p.id}
+                                          onChange={(e) => atualizarOpcaoAlteracao(indice, opcaoIndice, e.target.value)}
                                         />
-                                        <span>{letra}) {opcao || "-"}</span>
-                                      </label>
+                                        <label>Imagem alternativa {letra}</label>
+                                        <input
+                                          type="file"
+                                          accept="image/png,image/jpeg,image/jpg"
+                                          disabled={salvandoAlteracaoId === p.id}
+                                          onChange={async (e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            const base64 = await toBase64(file);
+                                            atualizarImagemOpcaoAlteracao(indice, opcaoIndice, base64);
+                                          }}
+                                        />
+                                        {imagens[opcaoIndice] ? <img className="preview" src={dataUri(imagens[opcaoIndice])} alt={`Opcao ${letra}`} /> : null}
+                                        <div className="actions compact-actions">
+                                          <button className="secondary" onClick={() => moverAlternativaAlteracao(indice, opcaoIndice, -1)} disabled={salvandoAlteracaoId === p.id || opcaoIndice === 0}>Subir</button>
+                                          <button className="secondary" onClick={() => moverAlternativaAlteracao(indice, opcaoIndice, 1)} disabled={salvandoAlteracaoId === p.id || opcaoIndice === opcoes.length - 1}>Descer</button>
+                                          <button className="secondary" onClick={() => atualizarImagemOpcaoAlteracao(indice, opcaoIndice, null)} disabled={salvandoAlteracaoId === p.id || !imagens[opcaoIndice]}>Remover imagem</button>
+                                          <button className="danger" onClick={() => removerAlternativaAlteracao(indice, opcaoIndice)} disabled={salvandoAlteracaoId === p.id || opcoes.length <= 2}>Remover alternativa</button>
+                                        </div>
+                                      </div>
                                     );
                                   })}
+                                  <button className="secondary" onClick={() => adicionarAlternativaAlteracao(indice)} disabled={salvandoAlteracaoId === p.id || opcoes.length >= 5}>Adicionar alternativa</button>
                                 </div>
                               ) : (
                                 <p className="empty-note">Esta questao nao possui alternativas cadastradas.</p>
@@ -1455,19 +1817,20 @@ function DashboardProfessor() {
                             </article>
                           );
                         })}
-                      </div>
+                        </div>
+                      </>
                     )}
                     <div className="actions">
                       <button
-                        onClick={() => salvarEditorGabarito(p.id)}
-                        disabled={salvandoGabaritoId === p.id || carregandoGabaritoId === p.id}
+                        onClick={() => salvarAlteracaoProvaAtual(p.id)}
+                        disabled={salvandoAlteracaoId === p.id || carregandoAlteracaoId === p.id}
                       >
-                        {salvandoGabaritoId === p.id ? "Salvando..." : "Salvar alteracoes"}
+                        {salvandoAlteracaoId === p.id ? "Salvando..." : "Salvar alteracoes"}
                       </button>
                       <button
                         className="secondary"
-                        onClick={cancelarEditorGabarito}
-                        disabled={salvandoGabaritoId === p.id}
+                        onClick={cancelarAlteracaoProva}
+                        disabled={salvandoAlteracaoId === p.id}
                       >
                         Cancelar
                       </button>
@@ -1486,7 +1849,13 @@ function DashboardProfessor() {
       {aba === "resultados" ? (
         <section className="card">
           <h2>Resultados</h2>
-          <select value={provaSelecionada} onChange={(e) => setProvaSelecionada(e.target.value)}>
+          <select
+            value={provaSelecionada}
+            onChange={(e) => {
+              setMensagemResultados("");
+              setProvaSelecionada(e.target.value);
+            }}
+          >
             {provas.map((p) => <option key={p.id} value={p.id}>{p.titulo} ({p.materia})</option>)}
           </select>
           <div className="actions">
@@ -1494,6 +1863,7 @@ function DashboardProfessor() {
               {baixandoCsv ? "Baixando..." : "Baixar CSV"}
             </button>
           </div>
+          {mensagemResultados ? <p className="ok">{mensagemResultados}</p> : null}
           {carregandoResultados ? <p>Carregando resultados...</p> : null}
           {estatisticasResultados ? (
             <div className="stats-grid">
@@ -1536,6 +1906,13 @@ function DashboardProfessor() {
                           onClick={() => setRespostasAbertasId(aberto ? "" : detalheId)}
                         >
                           {aberto ? "Fechar" : "Ver respostas"}
+                        </button>
+                        <button
+                          className="danger"
+                          onClick={() => excluirTentativa(r)}
+                          disabled={Boolean(excluindoTentativaId)}
+                        >
+                          {excluindoTentativaId === r.id ? "Excluindo..." : "Excluir tentativa"}
                         </button>
                       </td>
                     </tr>,
@@ -1885,6 +2262,9 @@ function AlunoPage() {
         setLogado(false);
         return;
       }
+      if (Array.isArray(data.questoes)) {
+        setProva((atual) => ({ ...atual, questoes: data.questoes }));
+      }
       setLogado(true);
     } catch (e) {
       setErro(getErrorMessage(e));
@@ -1975,28 +2355,29 @@ function AlunoPage() {
         </section>
       ) : (
         <section className="card">
-          {prova.questoes.map((q, i) => {
+          {(prova.questoes || []).map((q, i) => {
             const opcoes = Array.isArray(q.opcoes) && q.opcoes.length ? q.opcoes : ["", "", "", ""];
             const imagensOpcoes = Array.isArray(q.imagens_opcoes) ? q.imagens_opcoes : [];
+            const respostaKey = q.id || `q${i}`;
             return (
-              <article key={i} className="list-item">
+              <article key={respostaKey} className="list-item">
                 <strong>Questao {i + 1}</strong>
                 <p>{q.enunciado}</p>
                 {q.imagem ? <img className="preview" src={dataUri(q.imagem)} alt="Questao" /> : null}
                 {q.tipo === "texto" ? (
-                  <input onChange={(e) => setRespostas((p) => ({ ...p, [`q${i}`]: e.target.value }))} />
+                  <input onChange={(e) => setRespostas((p) => ({ ...p, [respostaKey]: e.target.value }))} />
                 ) : (
                   opcoes.map((op, j) => {
                     const letra = LETRAS[j];
-                    const inputId = `q_${i}_${letra}`;
+                    const inputId = `q_${respostaKey}_${letra}`;
                     return (
                       <label className="alternative-option" htmlFor={inputId} key={letra}>
                         <input
                           id={inputId}
                           type="radio"
-                          name={`q_${i}`}
-                          checked={respostas[`q${i}`] === letra}
-                          onChange={() => setRespostas((p) => ({ ...p, [`q${i}`]: letra }))}
+                          name={`q_${respostaKey}`}
+                          checked={respostas[respostaKey] === letra}
+                          onChange={() => setRespostas((p) => ({ ...p, [respostaKey]: letra }))}
                         />
                         <span className="alternative-content">
                           <span className="alternative-text">{letra}) {op}</span>

@@ -44,16 +44,17 @@ class Queries:
             conn.close()
 
     @staticmethod
-    def inserir_prova(prova_id, usuario_id, materia, titulo, questoes_json):
+    def inserir_prova(prova_id, usuario_id, materia, titulo, questoes_json, embaralhar_questoes=0):
         conn = dm.get_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO provas (
-                        id, usuario_id, materia, titulo, questoes, criada_em, requer_alunos_autorizados
+                        id, usuario_id, materia, titulo, questoes, criada_em,
+                        requer_alunos_autorizados, embaralhar_questoes
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, 1)
+                    VALUES (%s, %s, %s, %s, %s, %s, 1, %s)
                     """,
                     (
                         prova_id,
@@ -62,6 +63,7 @@ class Queries:
                         titulo,
                         questoes_json,
                         datetime.now().strftime("%d/%m/%Y %H:%M"),
+                        int(bool(embaralhar_questoes)),
                     ),
                 )
             conn.commit()
@@ -95,6 +97,32 @@ class Queries:
                 cur.execute(
                     "UPDATE provas SET questoes=%s WHERE id=%s",
                     (questoes_json, prova_id),
+                )
+                for resposta_id, nota in notas_respostas:
+                    cur.execute(
+                        "UPDATE respostas SET nota=%s WHERE id=%s AND prova_id=%s",
+                        (nota, resposta_id, prova_id),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def update_prova_com_recalculo(prova_id, questoes_json, embaralhar_questoes, notas_respostas):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE provas
+                    SET questoes=%s,
+                        embaralhar_questoes=%s
+                    WHERE id=%s
+                    """,
+                    (questoes_json, int(bool(embaralhar_questoes)), prova_id),
                 )
                 for resposta_id, nota in notas_respostas:
                     cur.execute(
@@ -197,6 +225,44 @@ class Queries:
                     ),
                 )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def delete_resposta_prova(prova_id, resposta_id):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM respostas WHERE id=%s AND prova_id=%s",
+                    (resposta_id, prova_id),
+                )
+                resposta = cur.fetchone()
+                if not resposta:
+                    conn.rollback()
+                    return None
+
+                resposta_dict = dict(resposta)
+                cur.execute(
+                    "DELETE FROM respostas WHERE id=%s AND prova_id=%s",
+                    (resposta_id, prova_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE aluno_acessos
+                    SET status='ativo',
+                        ultimo_evento_em=%s
+                    WHERE prova_id=%s
+                      AND nome_normalizado=%s
+                      AND status='finalizado'
+                    """,
+                    (datetime.utcnow(), prova_id, normalizar_nome(resposta_dict.get("nome_aluno") or "")),
+                )
+            conn.commit()
+            return resposta_dict
         except Exception:
             conn.rollback()
             raise
@@ -414,6 +480,41 @@ class Queries:
                     RETURNING *
                     """,
                     (prova_id, token, nome_aluno, nome_normalizado, device_id, datetime.utcnow()),
+                )
+                row = cur.fetchone()
+            conn.commit()
+            return dict(row) if row else None
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def salvar_ordem_questoes_aluno_acesso(prova_id, token, nome_aluno, device_id, questoes_ordem):
+        nome_normalizado = normalizar_nome(nome_aluno)
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE aluno_acessos
+                    SET questoes_ordem=%s,
+                        ultimo_evento_em=%s
+                    WHERE prova_id=%s
+                      AND token=%s
+                      AND nome_normalizado=%s
+                      AND device_id=%s
+                    RETURNING *
+                    """,
+                    (
+                        json.dumps(questoes_ordem, ensure_ascii=False),
+                        datetime.utcnow(),
+                        prova_id,
+                        token,
+                        nome_normalizado,
+                        device_id,
+                    ),
                 )
                 row = cur.fetchone()
             conn.commit()

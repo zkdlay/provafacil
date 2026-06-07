@@ -295,7 +295,8 @@ label { display: block; }
 .student-picker,
 .turma-form,
 .authorized-editor,
-.answer-key-editor {
+.answer-key-editor,
+.exam-editor {
   margin: 12px 0;
   padding: 14px;
   border: 1px solid var(--line);
@@ -304,9 +305,36 @@ label { display: block; }
 }
 
 .authorized-editor,
-.answer-key-editor {
+.answer-key-editor,
+.exam-editor {
   border-color: #cfe1f3;
   background: linear-gradient(135deg, #f8fafc 0%, #eef8f6 100%);
+}
+
+.exam-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.compact-actions {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.compact-actions button {
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.shuffle-toggle {
+  border: 1px solid #cfe1f3;
+  background: #f8fafc;
+}
+
+.option-editor-row {
+  display: grid;
+  gap: 8px;
 }
 
 .answer-key-list {

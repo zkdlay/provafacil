@@ -96,17 +96,21 @@ export function atualizarAlunosAutorizadosProva(provaId, alunosAutorizados, toke
   );
 }
 
-export function buscarGabaritoProva(provaId, token) {
-  return api(`/api/provas/${provaId}/gabarito`, {}, token);
+export function buscarProvaAlteracao(provaId, token) {
+  return api(`/api/provas/${provaId}/alterar`, {}, token);
 }
 
-export function atualizarGabaritoProva(provaId, questoes, token) {
+export function salvarProvaAlteracao(provaId, payload, token) {
   return api(
-    `/api/provas/${provaId}/gabarito`,
+    `/api/provas/${provaId}/alterar`,
     {
       method: "PUT",
-      body: JSON.stringify({ questoes }),
+      body: JSON.stringify(payload),
     },
     token
   );
+}
+
+export function excluirTentativaProva(provaId, respostaId, token) {
+  return api(`/api/provas/${provaId}/respostas/${respostaId}`, { method: "DELETE" }, token);
 }

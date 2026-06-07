@@ -43,10 +43,16 @@ class ProvaCreatePayload(BaseModel):
     titulo: str
     questoes: List[Dict[str, Any]]
     alunos_autorizados: Optional[List[int]] = None
+    embaralhar_questoes: bool = False
 
 
 class GabaritoUpdatePayload(BaseModel):
     questoes: List[Dict[str, Any]]
+
+
+class ProvaAlterarPayload(BaseModel):
+    questoes: List[Dict[str, Any]]
+    embaralhar_questoes: bool = False
 
 
 class AlunosAutorizadosPayload(BaseModel):
@@ -99,7 +105,63 @@ def prova_com_meta(prova: Dict[str, Any]):
     return {
         **prova,
         "quantidade_questoes": len(questoes),
+        "embaralhar_questoes": bool(int(prova.get("embaralhar_questoes") or 0)),
     }
+
+
+def validar_questoes_completas(questoes):
+    if not questoes:
+        raise HTTPException(status_code=400, detail="Adicione pelo menos uma questao.")
+    if len(questoes) > 80:
+        raise HTTPException(status_code=400, detail="A prova pode ter no maximo 80 questoes.")
+
+    for indice, questao in enumerate(questoes):
+        if not str(questao.get("enunciado") or "").strip():
+            raise HTTPException(status_code=400, detail=f"Preencha o enunciado da questao {indice + 1}.")
+        tipo = questao.get("tipo", "multipla_escolha")
+        if tipo == "texto":
+            if not str(questao.get("gabarito_texto") or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Preencha o gabarito textual da questao {indice + 1}.",
+                )
+            continue
+
+        opcoes = questao.get("opcoes") if isinstance(questao.get("opcoes"), list) else []
+        if len(opcoes) < 2 or len(opcoes) > 5:
+            raise HTTPException(
+                status_code=400,
+                detail=f"A questao {indice + 1} deve ter entre 2 e 5 alternativas.",
+            )
+        if any(not str(opcao or "").strip() for opcao in opcoes):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Preencha todas as alternativas da questao {indice + 1}.",
+            )
+        letras_validas = LETRAS_GABARITO[: len(opcoes)]
+        gabarito = str(questao.get("gabarito") or "").strip().upper()
+        if gabarito not in letras_validas:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Selecione um gabarito valido para a questao {indice + 1}.",
+            )
+
+
+def questoes_publicas(questoes, ordem=None):
+    questoes_ordenadas = ProvaService.ordenar_questoes_por_ids(questoes, ordem) if ordem else questoes
+    publicas = []
+    for indice, questao in enumerate(questoes_ordenadas):
+        publicas.append(
+            {
+                "id": ProvaService.questao_id(indice, questao),
+                "tipo": questao.get("tipo", "multipla_escolha"),
+                "enunciado": questao.get("enunciado", ""),
+                "opcoes": questao.get("opcoes", []),
+                "imagem": questao.get("imagem"),
+                "imagens_opcoes": questao.get("imagens_opcoes", []),
+            }
+        )
+    return publicas
 
 
 def aplicar_gabaritos_atualizados(questoes_originais, questoes_payload):
@@ -359,6 +421,7 @@ def atualizar_gabarito_prova(
 @app.post("/api/provas")
 def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Header(default=None)):
     user = get_user_from_token(x_auth_token)
+    validar_questoes_completas(payload.questoes)
     aluno_ids = payload.alunos_autorizados or []
     if not aluno_ids:
         raise HTTPException(
@@ -372,7 +435,11 @@ def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Heade
         )
 
     prova_id = ProvaService.salvar_prova(
-        user["usuario_id"], payload.materia.strip(), payload.titulo.strip(), payload.questoes
+        user["usuario_id"],
+        payload.materia.strip(),
+        payload.titulo.strip(),
+        payload.questoes,
+        payload.embaralhar_questoes,
     )
     try:
         ProvaService.salvar_alunos_autorizados(prova_id, aluno_ids)
@@ -421,6 +488,50 @@ def atualizar_prova(
     if payload.alunos_autorizados is not None:
         ProvaService.salvar_alunos_autorizados(prova_id, payload.alunos_autorizados)
     return {"ok": True}
+
+
+@app.get("/api/provas/{prova_id}/alterar")
+def obter_prova_para_alteracao(prova_id: str, x_auth_token: Optional[str] = Header(default=None)):
+    prova = validar_posse_prova(prova_id, x_auth_token)
+    questoes = json.loads(prova["questoes"])
+    questoes = ProvaService.normalizar_questoes_para_salvar(questoes)
+    return {
+        "prova": {
+            "id": prova["id"],
+            "titulo": prova["titulo"],
+            "materia": prova["materia"],
+            "quantidade_questoes": len(questoes),
+            "embaralhar_questoes": bool(int(prova.get("embaralhar_questoes") or 0)),
+        },
+        "questoes": questoes,
+    }
+
+
+@app.put("/api/provas/{prova_id}/alterar")
+def alterar_prova(
+    prova_id: str,
+    payload: ProvaAlterarPayload,
+    x_auth_token: Optional[str] = Header(default=None),
+):
+    prova = validar_posse_prova(prova_id, x_auth_token)
+    questoes_atuais = json.loads(prova["questoes"])
+    questoes_normalizadas = ProvaService.normalizar_questoes_para_salvar(
+        payload.questoes,
+        questoes_atuais,
+    )
+    validar_questoes_completas(questoes_normalizadas)
+    recalculadas = ProvaService.alterar_prova_e_recalcular(
+        prova_id,
+        questoes_normalizadas,
+        payload.embaralhar_questoes,
+    )
+    return {
+        "ok": True,
+        "message": "Prova alterada e notas recalculadas.",
+        "respostas_recalculadas": recalculadas,
+        "quantidade_questoes": len(questoes_normalizadas),
+        "embaralhar_questoes": payload.embaralhar_questoes,
+    }
 
 
 @app.get("/api/provas/{prova_id}/alunos-autorizados")
@@ -506,13 +617,14 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
         detalhes_respostas = []
         for idx, questao in enumerate(questoes):
             tipo = questao.get("tipo", "multipla_escolha")
-            resposta_aluno = resps.get(f"q{idx}")
+            resposta_aluno = ProvaService.resposta_da_questao(resps, idx, questao)
             if tipo == "texto":
                 gabarito = questao.get("gabarito_texto", "")
                 correta = ProvaService.corrigir_resposta_texto(resposta_aluno, gabarito)
                 detalhes_respostas.append(
                     {
                         "indice": idx,
+                        "questao_id": ProvaService.questao_id(idx, questao),
                         "tipo": "texto",
                         "enunciado": questao.get("enunciado", ""),
                         "imagem": questao.get("imagem"),
@@ -527,6 +639,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
                 detalhes_respostas.append(
                     {
                         "indice": idx,
+                        "questao_id": ProvaService.questao_id(idx, questao),
                         "tipo": "multipla_escolha",
                         "enunciado": questao.get("enunciado", ""),
                         "imagem": questao.get("imagem"),
@@ -550,6 +663,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
         notas.append(float(nota_recalculada))
         dados.append(
             {
+                "id": r["id"],
                 "nome_aluno": r["nome_aluno"],
                 "numero_aluno": ev.get("numero_aluno", "-"),
                 "nota": nota_recalculada,
@@ -575,6 +689,32 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
             "menor_nota": menor,
             "acessos_total": sum(v["acessos"] for v in eventos_por_aluno.values()),
             "saidas_aba_total": sum(v["saidas_aba"] for v in eventos_por_aluno.values()),
+        },
+    }
+
+
+@app.delete("/api/provas/{prova_id}/respostas/{resposta_id}")
+def excluir_tentativa_aluno(
+    prova_id: str,
+    resposta_id: int,
+    x_auth_token: Optional[str] = Header(default=None),
+):
+    validar_posse_prova(prova_id, x_auth_token)
+    resposta = ProvaService.excluir_tentativa(prova_id, resposta_id)
+    if not resposta:
+        raise HTTPException(status_code=404, detail="Tentativa nao encontrada.")
+    registrar_evento(
+        prova_id,
+        resposta.get("nome_aluno") or "",
+        "tentativa_excluida_professor",
+        "Professor excluiu a tentativa para permitir nova realizacao.",
+    )
+    return {
+        "ok": True,
+        "message": "Tentativa excluida. O aluno podera responder novamente se nao estiver bloqueado.",
+        "resposta": {
+            "id": resposta.get("id"),
+            "nome_aluno": resposta.get("nome_aluno"),
         },
     }
 
@@ -777,23 +917,12 @@ def buscar_prova_aluno(
     prova = ProvaService.buscar_prova(prova_id)
     if not prova:
         raise HTTPException(status_code=404, detail="Prova nao encontrada")
-    questoes = json.loads(prova["questoes"])
-    questoes_publicas = []
-    for q in questoes:
-        questoes_publicas.append(
-            {
-                "tipo": q.get("tipo", "multipla_escolha"),
-                "enunciado": q.get("enunciado", ""),
-                "opcoes": q.get("opcoes", []),
-                "imagem": q.get("imagem"),
-                "imagens_opcoes": q.get("imagens_opcoes", []),
-            }
-        )
     return {
         "id": prova["id"],
         "titulo": prova["titulo"],
         "materia": prova["materia"],
-        "questoes": questoes_publicas,
+        "aguardando_identificacao": True,
+        "message": "Informe nome e numero para acessar a prova.",
         "expira_em": format_expira_em(acesso.get("expira_em")),
     }
 
@@ -817,10 +946,9 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
             status_code=403,
             detail="Fraude detectada: seu nome nao esta autorizado para esta prova.",
         )
-    garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
+    acesso_individual = garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
+    questoes = json.loads(prova["questoes"])
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
-        prova = ProvaService.buscar_prova(prova_id)
-        questoes = json.loads(prova["questoes"])
         respostas = ProvaService.buscar_respostas(prova_id)
         nome_normalizado = normalizar_nome(nome)
         resp_aluno = next(
@@ -833,12 +961,30 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
             return {
                 "ok": True,
                 "ja_entregue": True,
-                "nota": resp_aluno["nota"],
+                "nota": ProvaService.calcular_nota(questoes, respostas_aluno),
                 "acertos": acertos,
                 "total": len(questoes),
             }
     registrar_evento(prova_id, nome, "login", f"Chamada: {numero}")
-    return {"ok": True, "ja_entregue": False}
+    embaralhar = bool(int(prova.get("embaralhar_questoes") or 0))
+    ordem_salva = acesso_individual.get("questoes_ordem") if acesso_individual else None
+    if ordem_salva:
+        ordem = ProvaService.normalizar_ordem_questoes(questoes, ordem_salva)
+    else:
+        ordem = ProvaService.gerar_ordem_questoes(questoes, embaralhar)
+    if not ordem_salva:
+        ProvaService.salvar_ordem_questoes_aluno_acesso(
+            prova_id,
+            payload.token,
+            nome,
+            device_id,
+            ordem,
+        )
+    return {
+        "ok": True,
+        "ja_entregue": False,
+        "questoes": questoes_publicas(questoes, ordem),
+    }
 
 
 @app.post("/api/aluno/provas/{prova_id}/eventos")

@@ -3,6 +3,7 @@
 """
 
 import json
+import random
 import re
 import secrets
 import uuid
@@ -75,6 +76,92 @@ NEGACOES_TEXTO = {"nao", "nem", "nunca", "jamais", "sem"}
 
 
 class ProvaService:
+    @staticmethod
+    def questao_id(indice, questao):
+        return str((questao or {}).get("id") or f"q{indice}")
+
+    @staticmethod
+    def normalizar_questoes_para_salvar(questoes, questoes_atuais=None):
+        atuais = questoes_atuais or []
+        normalizadas = []
+        for indice, questao in enumerate(questoes or []):
+            atual = atuais[indice] if indice < len(atuais) and isinstance(atuais[indice], dict) else {}
+            tipo = "texto" if questao.get("tipo") == "texto" else "multipla_escolha"
+            qid = str(questao.get("id") or atual.get("id") or f"q{indice}")
+            comum = {
+                "id": qid,
+                "tipo": tipo,
+                "enunciado": str(questao.get("enunciado") or "").strip(),
+                "imagem": questao.get("imagem") or None,
+            }
+            if tipo == "texto":
+                normalizadas.append(
+                    {
+                        **comum,
+                        "opcoes": [],
+                        "imagens_opcoes": [],
+                        "gabarito": "",
+                        "gabarito_texto": str(questao.get("gabarito_texto") or "").strip(),
+                    }
+                )
+                continue
+
+            opcoes = questao.get("opcoes") if isinstance(questao.get("opcoes"), list) else []
+            imagens = questao.get("imagens_opcoes") if isinstance(questao.get("imagens_opcoes"), list) else []
+            opcoes = [str(opcao or "") for opcao in opcoes[:5]]
+            imagens = [(imagens[i] if i < len(imagens) else None) for i in range(len(opcoes))]
+            normalizadas.append(
+                {
+                    **comum,
+                    "opcoes": opcoes,
+                    "imagens_opcoes": imagens,
+                    "gabarito": str(questao.get("gabarito") or "").strip().upper(),
+                    "gabarito_texto": "",
+                }
+            )
+        return normalizadas
+
+    @staticmethod
+    def resposta_da_questao(respostas_aluno, indice, questao):
+        if not isinstance(respostas_aluno, dict):
+            return None
+        qid = questao.get("id")
+        if qid and qid in respostas_aluno:
+            return respostas_aluno.get(qid)
+        return respostas_aluno.get(f"q{indice}")
+
+    @staticmethod
+    def ids_questoes(questoes):
+        return [ProvaService.questao_id(indice, questao) for indice, questao in enumerate(questoes or [])]
+
+    @staticmethod
+    def normalizar_ordem_questoes(questoes, ordem=None):
+        ids = ProvaService.ids_questoes(questoes)
+        ids_validos = set(ids)
+        ordem_base = []
+        if isinstance(ordem, str) and ordem:
+            try:
+                ordem = json.loads(ordem)
+            except json.JSONDecodeError:
+                ordem = []
+        if isinstance(ordem, list):
+            ordem_base = [str(qid) for qid in ordem if str(qid) in ids_validos]
+        faltantes = [qid for qid in ids if qid not in ordem_base]
+        return ordem_base + faltantes
+
+    @staticmethod
+    def gerar_ordem_questoes(questoes, embaralhar=False):
+        ordem = ProvaService.ids_questoes(questoes)
+        if embaralhar and len(ordem) > 1:
+            random.SystemRandom().shuffle(ordem)
+        return ordem
+
+    @staticmethod
+    def ordenar_questoes_por_ids(questoes, ordem):
+        por_id = {ProvaService.questao_id(indice, questao): questao for indice, questao in enumerate(questoes or [])}
+        ordem_normalizada = ProvaService.normalizar_ordem_questoes(questoes, ordem)
+        return [{**por_id[qid], "id": qid} for qid in ordem_normalizada if qid in por_id]
+
     @staticmethod
     def _normalizar_texto(valor):
         if valor is None:
@@ -226,10 +313,16 @@ class ProvaService:
         return resposta == questao.get("gabarito")
 
     @staticmethod
-    def salvar_prova(usuario_id, materia, titulo, questoes):
+    def salvar_prova(usuario_id, materia, titulo, questoes, embaralhar_questoes=False):
         prova_id = str(uuid.uuid4())[:8]
+        questoes = ProvaService.normalizar_questoes_para_salvar(questoes)
         Queries.inserir_prova(
-            prova_id, usuario_id, materia, titulo, json.dumps(questoes, ensure_ascii=False)
+            prova_id,
+            usuario_id,
+            materia,
+            titulo,
+            json.dumps(questoes, ensure_ascii=False),
+            embaralhar_questoes,
         )
         return prova_id
 
@@ -263,6 +356,12 @@ class ProvaService:
     @staticmethod
     def criar_ou_atualizar_aluno_acesso(prova_id, token, nome_aluno, device_id):
         return Queries.criar_ou_atualizar_aluno_acesso(prova_id, token, nome_aluno, device_id)
+
+    @staticmethod
+    def salvar_ordem_questoes_aluno_acesso(prova_id, token, nome_aluno, device_id, questoes_ordem):
+        return Queries.salvar_ordem_questoes_aluno_acesso(
+            prova_id, token, nome_aluno, device_id, questoes_ordem
+        )
 
     @staticmethod
     def buscar_aluno_acesso(prova_id, token, nome_aluno, device_id):
@@ -302,6 +401,21 @@ class ProvaService:
         Queries.update_gabarito_e_notas(
             prova_id,
             json.dumps(questoes, ensure_ascii=False),
+            notas_respostas,
+        )
+        return len(notas_respostas)
+
+    @staticmethod
+    def alterar_prova_e_recalcular(prova_id, questoes, embaralhar_questoes=False):
+        respostas = Queries.get_respostas_prova(prova_id)
+        notas_respostas = []
+        for resposta in respostas:
+            respostas_aluno = json.loads(resposta["respostas"])
+            notas_respostas.append((resposta["id"], ProvaService.calcular_nota(questoes, respostas_aluno)))
+        Queries.update_prova_com_recalculo(
+            prova_id,
+            json.dumps(questoes, ensure_ascii=False),
+            embaralhar_questoes,
             notas_respostas,
         )
         return len(notas_respostas)
@@ -367,11 +481,15 @@ class ProvaService:
         return Queries.get_respostas_prova(prova_id)
 
     @staticmethod
+    def excluir_tentativa(prova_id, resposta_id):
+        return Queries.delete_resposta_prova(prova_id, resposta_id)
+
+    @staticmethod
     def contar_acertos(questoes, respostas_aluno):
         return sum(
             1
             for i, q in enumerate(questoes)
-            if ProvaService._questao_correta(q, respostas_aluno.get(f"q{i}"))
+            if ProvaService._questao_correta(q, ProvaService.resposta_da_questao(respostas_aluno, i, q))
         )
 
     @staticmethod

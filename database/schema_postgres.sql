@@ -12,10 +12,12 @@ CREATE TABLE IF NOT EXISTS provas (
     titulo TEXT,
     questoes TEXT,
     criada_em TEXT,
-    requer_alunos_autorizados INTEGER DEFAULT 0
+    requer_alunos_autorizados INTEGER DEFAULT 0,
+    embaralhar_questoes INTEGER DEFAULT 0
 );
 
 ALTER TABLE provas ADD COLUMN IF NOT EXISTS requer_alunos_autorizados INTEGER DEFAULT 0;
+ALTER TABLE provas ADD COLUMN IF NOT EXISTS embaralhar_questoes INTEGER DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS turmas (
     id SERIAL PRIMARY KEY,
@@ -78,11 +80,14 @@ CREATE TABLE IF NOT EXISTS aluno_acessos (
     device_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'ativo',
     motivo_bloqueio TEXT,
+    questoes_ordem TEXT,
     criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     bloqueado_em TIMESTAMP NULL,
     ultimo_evento_em TIMESTAMP NULL,
     UNIQUE(prova_id, token, nome_normalizado, device_id)
 );
+
+ALTER TABLE aluno_acessos ADD COLUMN IF NOT EXISTS questoes_ordem TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_provas_usuario_id ON provas(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_turmas_usuario_id ON turmas(usuario_id);
