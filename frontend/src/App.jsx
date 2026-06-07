@@ -3,6 +3,8 @@ import { Route, Routes, useLocation, useParams } from "react-router-dom";
 import {
   api,
   atualizarAlunosAutorizadosProva,
+  atualizarGabaritoProva,
+  buscarGabaritoProva,
   criarTurma,
   excluirTurma,
   getErrorMessage,
@@ -848,6 +850,10 @@ function DashboardProfessor() {
   const [alunosAutorizadosEdicao, setAlunosAutorizadosEdicao] = useState([]);
   const [carregandoAutorizadosId, setCarregandoAutorizadosId] = useState("");
   const [salvandoAutorizadosId, setSalvandoAutorizadosId] = useState("");
+  const [editandoGabaritoProvaId, setEditandoGabaritoProvaId] = useState("");
+  const [questoesGabaritoEdicao, setQuestoesGabaritoEdicao] = useState([]);
+  const [carregandoGabaritoId, setCarregandoGabaritoId] = useState("");
+  const [salvandoGabaritoId, setSalvandoGabaritoId] = useState("");
   const [mensagemProvas, setMensagemProvas] = useState("");
   const deleteLockRef = useRef("");
   const resultadosRequestRef = useRef(0);
@@ -975,6 +981,9 @@ function DashboardProfessor() {
       if (editandoAlunosProvaId === id) {
         cancelarEditorAlunos();
       }
+      if (editandoGabaritoProvaId === id) {
+        cancelarEditorGabarito();
+      }
     } catch (e) {
       setErro(getErrorMessage(e));
     } finally {
@@ -1063,6 +1072,8 @@ function DashboardProfessor() {
     if (carregandoAutorizadosId || salvandoAutorizadosId) return;
     setErro("");
     setMensagemProvas("");
+    setEditandoGabaritoProvaId("");
+    setQuestoesGabaritoEdicao([]);
     setEditandoAlunosProvaId(provaId);
     setCarregandoAutorizadosId(provaId);
     try {
@@ -1105,6 +1116,85 @@ function DashboardProfessor() {
       setErro(getErrorMessage(e));
     } finally {
       setSalvandoAutorizadosId("");
+    }
+  }
+
+  async function abrirEditorGabarito(provaId) {
+    if (carregandoGabaritoId || salvandoGabaritoId) return;
+    setErro("");
+    setMensagemProvas("");
+    setEditandoAlunosProvaId("");
+    setAlunosAutorizadosEdicao([]);
+    setEditandoGabaritoProvaId(provaId);
+    setQuestoesGabaritoEdicao([]);
+    setCarregandoGabaritoId(provaId);
+    try {
+      const data = await buscarGabaritoProva(provaId, auth.token);
+      setQuestoesGabaritoEdicao(data.questoes || []);
+    } catch (e) {
+      setErro(getErrorMessage(e));
+      setEditandoGabaritoProvaId("");
+      setQuestoesGabaritoEdicao([]);
+    } finally {
+      setCarregandoGabaritoId("");
+    }
+  }
+
+  function cancelarEditorGabarito() {
+    if (salvandoGabaritoId) return;
+    setEditandoGabaritoProvaId("");
+    setQuestoesGabaritoEdicao([]);
+    setMensagemProvas("");
+  }
+
+  function atualizarGabaritoQuestao(indice, campos) {
+    setQuestoesGabaritoEdicao((prev) =>
+      prev.map((questao, atual) => (atual === indice ? { ...questao, ...campos } : questao))
+    );
+  }
+
+  function validarGabaritoEdicao() {
+    for (let indice = 0; indice < questoesGabaritoEdicao.length; indice += 1) {
+      const questao = questoesGabaritoEdicao[indice] || {};
+      const tipo = questao.tipo === "texto" ? "texto" : "multipla_escolha";
+      if (tipo === "texto") {
+        if (!String(questao.gabarito_texto || "").trim()) {
+          setErro(`Preencha o gabarito textual da questao ${indice + 1}.`);
+          return false;
+        }
+        continue;
+      }
+
+      const opcoes = Array.isArray(questao.opcoes) ? questao.opcoes : [];
+      const letrasValidas = LETRAS.slice(0, opcoes.length);
+      if (!letrasValidas.length || !letrasValidas.includes(String(questao.gabarito || "").toUpperCase())) {
+        setErro(`Selecione um gabarito valido para a questao ${indice + 1}.`);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  async function salvarEditorGabarito(provaId) {
+    if (salvandoGabaritoId || carregandoGabaritoId) return;
+    if (!validarGabaritoEdicao()) return;
+
+    setErro("");
+    setMensagemProvas("");
+    setSalvandoGabaritoId(provaId);
+    try {
+      const data = await atualizarGabaritoProva(provaId, questoesGabaritoEdicao, auth.token);
+      setMensagemProvas(data?.message || "Gabarito atualizado e notas recalculadas.");
+      setEditandoGabaritoProvaId("");
+      setQuestoesGabaritoEdicao([]);
+      setResultados([]);
+      setEstatisticasResultados(null);
+      setRespostasAbertasId("");
+      resultadosRequestRef.current += 1;
+    } catch (e) {
+      setErro(getErrorMessage(e));
+    } finally {
+      setSalvandoGabaritoId("");
     }
   }
 
@@ -1200,6 +1290,7 @@ function DashboardProfessor() {
           {provas.map((p) => {
             const link = p.token_acesso ? `${window.location.origin}/aluno/${p.id}?token=${p.token_acesso}` : "";
             const editandoAlunos = editandoAlunosProvaId === p.id;
+            const editandoGabarito = editandoGabaritoProvaId === p.id;
             const selecionadosEdicao = new Set(alunosAutorizadosEdicao.map(Number));
             return (
               <article className="list-item" key={p.id}>
@@ -1220,6 +1311,13 @@ function DashboardProfessor() {
                     disabled={Boolean(carregandoAutorizadosId) || Boolean(salvandoAutorizadosId)}
                   >
                     {carregandoAutorizadosId === p.id ? "Carregando..." : "Editar alunos autorizados"}
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() => abrirEditorGabarito(p.id)}
+                    disabled={Boolean(carregandoGabaritoId) || Boolean(salvandoGabaritoId)}
+                  >
+                    {carregandoGabaritoId === p.id ? "Carregando..." : "Editar gabarito"}
                   </button>
                   <button className="danger" onClick={() => excluir(p.id)} disabled={Boolean(excluindoId)}>
                     {excluindoId === p.id ? "Excluindo..." : "Excluir"}
@@ -1288,6 +1386,94 @@ function DashboardProfessor() {
                     </div>
                     <p className="empty-note">
                       Alterar autorizados nao gera novo link e nao desbloqueia alunos automaticamente.
+                    </p>
+                  </div>
+                ) : null}
+                {editandoGabarito ? (
+                  <div className="answer-key-editor">
+                    <div className="section-title-row compact">
+                      <div>
+                        <strong>Editar gabarito</strong>
+                        <span>Altere apenas as respostas esperadas desta prova.</span>
+                      </div>
+                    </div>
+                    {carregandoGabaritoId === p.id ? (
+                      <p>Carregando gabarito...</p>
+                    ) : (
+                      <div className="answer-key-list">
+                        {questoesGabaritoEdicao.map((questao, indice) => {
+                          const tipo = questao.tipo === "texto" ? "texto" : "multipla_escolha";
+                          const opcoes = Array.isArray(questao.opcoes) ? questao.opcoes : [];
+                          return (
+                            <article className="answer-key-card" key={indice}>
+                              <div className="section-title-row compact">
+                                <div>
+                                  <strong>Questao {indice + 1}</strong>
+                                  <span>{tipo === "texto" ? "Texto" : "Multipla escolha"}</span>
+                                </div>
+                              </div>
+                              <p>{questao.enunciado || "-"}</p>
+                              {questao.imagem ? (
+                                <img
+                                  className="preview"
+                                  src={dataUri(questao.imagem)}
+                                  alt={`Questao ${indice + 1}`}
+                                />
+                              ) : null}
+                              {tipo === "texto" ? (
+                                <label>
+                                  Gabarito esperado
+                                  <input
+                                    value={questao.gabarito_texto || ""}
+                                    disabled={salvandoGabaritoId === p.id}
+                                    onChange={(e) =>
+                                      atualizarGabaritoQuestao(indice, { gabarito_texto: e.target.value })
+                                    }
+                                  />
+                                </label>
+                              ) : opcoes.length ? (
+                                <div className="answer-key-options">
+                                  {opcoes.map((opcao, opcaoIndice) => {
+                                    const letra = LETRAS[opcaoIndice];
+                                    return (
+                                      <label className="check-row" key={`${indice}-${letra}`}>
+                                        <input
+                                          type="radio"
+                                          name={`gabarito-${p.id}-${indice}`}
+                                          checked={questao.gabarito === letra}
+                                          disabled={salvandoGabaritoId === p.id}
+                                          onChange={() => atualizarGabaritoQuestao(indice, { gabarito: letra })}
+                                        />
+                                        <span>{letra}) {opcao || "-"}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="empty-note">Esta questao nao possui alternativas cadastradas.</p>
+                              )}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div className="actions">
+                      <button
+                        onClick={() => salvarEditorGabarito(p.id)}
+                        disabled={salvandoGabaritoId === p.id || carregandoGabaritoId === p.id}
+                      >
+                        {salvandoGabaritoId === p.id ? "Salvando..." : "Salvar alteracoes"}
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={cancelarEditorGabarito}
+                        disabled={salvandoGabaritoId === p.id}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                    <p className="empty-note">
+                      As respostas dos alunos serao preservadas; as notas existentes serao recalculadas.
                     </p>
                   </div>
                 ) : null}

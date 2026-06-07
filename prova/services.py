@@ -7,10 +7,71 @@ import re
 import secrets
 import uuid
 import unicodedata
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 
 from core.constants import LINK_EXPIRATION_MINUTES
 from database.queries import Queries
+
+
+STOPWORDS_TEXTO = {
+    "a",
+    "ao",
+    "aos",
+    "as",
+    "com",
+    "como",
+    "da",
+    "das",
+    "de",
+    "do",
+    "dos",
+    "e",
+    "em",
+    "na",
+    "nas",
+    "no",
+    "nos",
+    "o",
+    "os",
+    "para",
+    "pela",
+    "pelas",
+    "pelo",
+    "pelos",
+    "por",
+    "porque",
+    "que",
+    "quanto",
+    "se",
+    "sao",
+    "ser",
+    "sua",
+    "suas",
+    "seu",
+    "seus",
+    "um",
+    "uma",
+    "uns",
+    "umas",
+}
+
+VERBOS_GENERICOS_TEXTO = {
+    "apresenta",
+    "apresentam",
+    "apresentar",
+    "apresentarem",
+    "classifica",
+    "classificam",
+    "classificar",
+    "possui",
+    "possuem",
+    "possuir",
+    "tem",
+    "ter",
+}
+
+NEGACOES_TEXTO = {"nao", "nem", "nunca", "jamais", "sem"}
 
 
 class ProvaService:
@@ -21,16 +82,147 @@ class ProvaService:
         texto = str(valor).strip().lower()
         texto = unicodedata.normalize("NFD", texto)
         texto = "".join(ch for ch in texto if unicodedata.category(ch) != "Mn")
+        texto = re.sub(r"[^a-z0-9\s]", " ", texto)
         texto = re.sub(r"\s+", " ", texto)
         return texto
+
+    @staticmethod
+    def normalizar_texto_resposta(valor):
+        return ProvaService._normalizar_texto(valor)
+
+    @staticmethod
+    def _tokens_resposta(valor):
+        texto = ProvaService.normalizar_texto_resposta(valor)
+        tokens = re.findall(r"[a-z0-9]+", texto)
+        return [
+            token
+            for token in tokens
+            if token not in STOPWORDS_TEXTO and token not in VERBOS_GENERICOS_TEXTO
+        ]
+
+    @staticmethod
+    def _tem_negacao(valor):
+        return any(token in NEGACOES_TEXTO for token in ProvaService._tokens_resposta(valor))
+
+    @staticmethod
+    def _negacao_compativel(resposta_aluno, gabarito_texto):
+        return ProvaService._tem_negacao(resposta_aluno) == ProvaService._tem_negacao(gabarito_texto)
+
+    @staticmethod
+    def _similaridade(a, b):
+        return SequenceMatcher(None, a, b).ratio()
+
+    @staticmethod
+    def _token_correspondente(token, candidatos):
+        if token in candidatos:
+            return True
+        if len(token) <= 3:
+            return False
+        return any(ProvaService._similaridade(token, candidato) >= 0.84 for candidato in candidatos)
+
+    @staticmethod
+    def _cobertura_tokens(tokens_aluno, tokens_gabarito):
+        if not tokens_gabarito:
+            return 0
+        return sum(
+            1
+            for token in tokens_gabarito
+            if ProvaService._token_correspondente(token, tokens_aluno)
+        ) / len(tokens_gabarito)
+
+    @staticmethod
+    def _termos_lista(valor):
+        if valor is None:
+            return []
+        texto = str(valor).strip().lower()
+        texto = unicodedata.normalize("NFD", texto)
+        texto = "".join(ch for ch in texto if unicodedata.category(ch) != "Mn")
+        partes = re.split(r"\s*(?:,|;|\n|\be\b)\s*", texto)
+        termos = []
+        for parte in partes:
+            tokens = ProvaService._tokens_resposta(parte)
+            if tokens:
+                termos.append(" ".join(tokens))
+        return termos
+
+    @staticmethod
+    def _termo_correspondente(termo, candidatos):
+        if termo in candidatos:
+            return True
+        return any(ProvaService._similaridade(termo, candidato) >= 0.86 for candidato in candidatos)
+
+    @staticmethod
+    def _comparar_listas_termos(resposta_aluno, gabarito_texto):
+        termos_aluno = ProvaService._termos_lista(resposta_aluno)
+        termos_gabarito = ProvaService._termos_lista(gabarito_texto)
+        if len(termos_gabarito) < 3 or len(termos_aluno) < 2:
+            return False, 0
+
+        cobertura = sum(
+            1
+            for termo in termos_gabarito
+            if ProvaService._termo_correspondente(termo, termos_aluno)
+        ) / len(termos_gabarito)
+        return cobertura >= 0.85, cobertura
+
+    @staticmethod
+    def corrigir_resposta_texto(resposta_aluno, gabarito_texto, retornar_detalhes=False):
+        normalizado_aluno = ProvaService.normalizar_texto_resposta(resposta_aluno)
+        normalizado_gabarito = ProvaService.normalizar_texto_resposta(gabarito_texto)
+
+        def finalizar(correta, motivo, similaridade=0, cobertura=0):
+            detalhes = {
+                "normalizado_aluno": normalizado_aluno,
+                "normalizado_gabarito": normalizado_gabarito,
+                "similaridade": round(similaridade, 3),
+                "cobertura": round(cobertura, 3),
+                "motivo": motivo,
+            }
+            return (correta, detalhes) if retornar_detalhes else correta
+
+        if not normalizado_aluno or not normalizado_gabarito:
+            return finalizar(False, "resposta_ou_gabarito_vazio")
+
+        if not ProvaService._negacao_compativel(normalizado_aluno, normalizado_gabarito):
+            return finalizar(False, "negacao_incompativel")
+
+        if normalizado_aluno == normalizado_gabarito:
+            return finalizar(True, "igualdade_normalizada", 1, 1)
+
+        lista_correta, cobertura_lista = ProvaService._comparar_listas_termos(
+            normalizado_aluno,
+            normalizado_gabarito,
+        )
+        if lista_correta:
+            return finalizar(True, "lista_de_termos_equivalente", 1, cobertura_lista)
+
+        tokens_aluno = ProvaService._tokens_resposta(normalizado_aluno)
+        tokens_gabarito = ProvaService._tokens_resposta(normalizado_gabarito)
+        if not tokens_aluno or not tokens_gabarito:
+            return finalizar(False, "sem_tokens_relevantes")
+
+        cobertura = ProvaService._cobertura_tokens(tokens_aluno, tokens_gabarito)
+        similaridade = ProvaService._similaridade(normalizado_aluno, normalizado_gabarito)
+
+        if len(tokens_gabarito) >= 4 and len(tokens_aluno) < max(2, len(tokens_gabarito) * 0.5):
+            return finalizar(False, "resposta_curta_demais", similaridade, cobertura)
+
+        if cobertura >= 0.9:
+            return finalizar(True, "cobertura_alta_de_termos", similaridade, cobertura)
+
+        if similaridade >= 0.8 and cobertura >= 0.65:
+            return finalizar(True, "similaridade_e_cobertura_suficientes", similaridade, cobertura)
+
+        if cobertura >= 0.65 and len(tokens_gabarito) <= 3 and len(tokens_aluno) >= 2:
+            return finalizar(True, "termos_essenciais_presentes", similaridade, cobertura)
+
+        return finalizar(False, "criterios_insuficientes", similaridade, cobertura)
 
     @staticmethod
     def _questao_correta(questao, resposta):
         tipo = questao.get("tipo", "multipla_escolha")
         if tipo == "texto":
-            return ProvaService._normalizar_texto(resposta) == ProvaService._normalizar_texto(
-                questao.get("gabarito_texto", "")
-            )
+            return ProvaService.corrigir_resposta_texto(resposta, questao.get("gabarito_texto", ""))
         return resposta == questao.get("gabarito")
 
     @staticmethod
@@ -99,6 +291,20 @@ class ProvaService:
     @staticmethod
     def atualizar_prova(prova_id, materia, titulo, questoes):
         Queries.update_prova(prova_id, materia, titulo, json.dumps(questoes, ensure_ascii=False))
+
+    @staticmethod
+    def atualizar_gabarito_e_recalcular(prova_id, questoes):
+        respostas = Queries.get_respostas_prova(prova_id)
+        notas_respostas = []
+        for resposta in respostas:
+            respostas_aluno = json.loads(resposta["respostas"])
+            notas_respostas.append((resposta["id"], ProvaService.calcular_nota(questoes, respostas_aluno)))
+        Queries.update_gabarito_e_notas(
+            prova_id,
+            json.dumps(questoes, ensure_ascii=False),
+            notas_respostas,
+        )
+        return len(notas_respostas)
 
     @staticmethod
     def buscar_prova(prova_id):

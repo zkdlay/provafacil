@@ -88,6 +88,27 @@ class Queries:
             conn.close()
 
     @staticmethod
+    def update_gabarito_e_notas(prova_id, questoes_json, notas_respostas):
+        conn = dm.get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE provas SET questoes=%s WHERE id=%s",
+                    (questoes_json, prova_id),
+                )
+                for resposta_id, nota in notas_respostas:
+                    cur.execute(
+                        "UPDATE respostas SET nota=%s WHERE id=%s AND prova_id=%s",
+                        (nota, resposta_id, prova_id),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
     def get_prova(prova_id):
         conn = dm.get_conn()
         try:

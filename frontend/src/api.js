@@ -95,3 +95,18 @@ export function atualizarAlunosAutorizadosProva(provaId, alunosAutorizados, toke
     token
   );
 }
+
+export function buscarGabaritoProva(provaId, token) {
+  return api(`/api/provas/${provaId}/gabarito`, {}, token);
+}
+
+export function atualizarGabaritoProva(provaId, questoes, token) {
+  return api(
+    `/api/provas/${provaId}/gabarito`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ questoes }),
+    },
+    token
+  );
+}

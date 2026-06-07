@@ -25,6 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 SESSIONS: Dict[str, Dict[str, Any]] = {}
+LETRAS_GABARITO = ["A", "B", "C", "D", "E"]
 
 
 class RegisterPayload(BaseModel):
@@ -42,6 +43,10 @@ class ProvaCreatePayload(BaseModel):
     titulo: str
     questoes: List[Dict[str, Any]]
     alunos_autorizados: Optional[List[int]] = None
+
+
+class GabaritoUpdatePayload(BaseModel):
+    questoes: List[Dict[str, Any]]
 
 
 class AlunosAutorizadosPayload(BaseModel):
@@ -95,6 +100,48 @@ def prova_com_meta(prova: Dict[str, Any]):
         **prova,
         "quantidade_questoes": len(questoes),
     }
+
+
+def aplicar_gabaritos_atualizados(questoes_originais, questoes_payload):
+    if len(questoes_originais) != len(questoes_payload):
+        raise HTTPException(
+            status_code=400,
+            detail="A quantidade de questoes enviada nao confere com a prova.",
+        )
+
+    questoes_atualizadas = []
+    for indice, questao_original in enumerate(questoes_originais):
+        payload_questao = questoes_payload[indice] or {}
+        tipo = questao_original.get("tipo", "multipla_escolha")
+        questao = dict(questao_original)
+
+        if tipo == "texto":
+            gabarito_texto = str(payload_questao.get("gabarito_texto", "") or "").strip()
+            if not gabarito_texto:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Preencha o gabarito textual da questao {indice + 1}.",
+                )
+            questao["gabarito_texto"] = gabarito_texto
+        else:
+            opcoes = questao_original.get("opcoes") if isinstance(questao_original.get("opcoes"), list) else []
+            letras_validas = LETRAS_GABARITO[: len(opcoes)]
+            gabarito = str(payload_questao.get("gabarito", "") or "").strip().upper()
+            if not letras_validas:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"A questao {indice + 1} nao possui alternativas validas.",
+                )
+            if gabarito not in letras_validas:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Selecione um gabarito valido para a questao {indice + 1}.",
+                )
+            questao["gabarito"] = gabarito
+
+        questoes_atualizadas.append(questao)
+
+    return questoes_atualizadas
 
 
 def format_expira_em(expira_em):
@@ -273,6 +320,42 @@ def detalhar_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=N
     return prova_com_meta(prova)
 
 
+@app.get("/api/provas/{prova_id}/gabarito")
+def obter_gabarito_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=None)):
+    prova = validar_posse_prova(prova_id, x_auth_token)
+    questoes = json.loads(prova["questoes"])
+    return {
+        "prova": {
+            "id": prova["id"],
+            "titulo": prova["titulo"],
+            "materia": prova["materia"],
+            "quantidade_questoes": len(questoes),
+        },
+        "questoes": questoes,
+    }
+
+
+@app.put("/api/provas/{prova_id}/gabarito")
+def atualizar_gabarito_prova(
+    prova_id: str,
+    payload: GabaritoUpdatePayload,
+    x_auth_token: Optional[str] = Header(default=None),
+):
+    prova = validar_posse_prova(prova_id, x_auth_token)
+    questoes_originais = json.loads(prova["questoes"])
+    questoes_atualizadas = aplicar_gabaritos_atualizados(questoes_originais, payload.questoes)
+    respostas_recalculadas = ProvaService.atualizar_gabarito_e_recalcular(
+        prova_id,
+        questoes_atualizadas,
+    )
+    return {
+        "ok": True,
+        "message": "Gabarito atualizado e notas recalculadas.",
+        "respostas_recalculadas": respostas_recalculadas,
+        "questoes": questoes_atualizadas,
+    }
+
+
 @app.post("/api/provas")
 def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Header(default=None)):
     user = get_user_from_token(x_auth_token)
@@ -424,7 +507,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
             resposta_aluno = resps.get(f"q{idx}")
             if tipo == "texto":
                 gabarito = questao.get("gabarito_texto", "")
-                correta = ProvaService._normalizar_texto(resposta_aluno) == ProvaService._normalizar_texto(gabarito)
+                correta = ProvaService.corrigir_resposta_texto(resposta_aluno, gabarito)
                 detalhes_respostas.append(
                     {
                         "indice": idx,

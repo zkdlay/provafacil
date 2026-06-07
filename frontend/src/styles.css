@@ -294,7 +294,8 @@ label { display: block; }
 
 .student-picker,
 .turma-form,
-.authorized-editor {
+.authorized-editor,
+.answer-key-editor {
   margin: 12px 0;
   padding: 14px;
   border: 1px solid var(--line);
@@ -302,9 +303,34 @@ label { display: block; }
   background: #f8fafc;
 }
 
-.authorized-editor {
+.authorized-editor,
+.answer-key-editor {
   border-color: #cfe1f3;
   background: linear-gradient(135deg, #f8fafc 0%, #eef8f6 100%);
+}
+
+.answer-key-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.answer-key-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dbe5f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.answer-key-card p {
+  margin: 0;
+}
+
+.answer-key-options {
+  display: grid;
+  gap: 8px;
 }
 
 .student-picker h3 {
@@ -348,7 +374,8 @@ label { display: block; }
   background: #eff6ff;
 }
 
-.check-row input[type="checkbox"] {
+.check-row input[type="checkbox"],
+.check-row input[type="radio"] {
   width: auto;
   margin: 0;
 }
