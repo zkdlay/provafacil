@@ -44,6 +44,7 @@ class ProvaCreatePayload(BaseModel):
     questoes: List[Dict[str, Any]]
     alunos_autorizados: Optional[List[int]] = None
     embaralhar_questoes: bool = False
+    valor_atividade: float = 10
 
 
 class GabaritoUpdatePayload(BaseModel):
@@ -53,6 +54,7 @@ class GabaritoUpdatePayload(BaseModel):
 class ProvaAlterarPayload(BaseModel):
     questoes: List[Dict[str, Any]]
     embaralhar_questoes: bool = False
+    valor_atividade: float = 10
 
 
 class AlunosAutorizadosPayload(BaseModel):
@@ -102,11 +104,23 @@ def validar_posse_prova(prova_id: str, token: Optional[str]):
 
 def prova_com_meta(prova: Dict[str, Any]):
     questoes = json.loads(prova["questoes"])
+    valor_atividade = ProvaService.valor_atividade_da_prova(prova)
     return {
         **prova,
         "quantidade_questoes": len(questoes),
         "embaralhar_questoes": bool(int(prova.get("embaralhar_questoes") or 0)),
+        "valor_atividade": valor_atividade,
     }
+
+
+def validar_valor_atividade(valor):
+    try:
+        valor_float = float(valor)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Informe um valor valido para a atividade.")
+    if valor_float <= 0:
+        raise HTTPException(status_code=400, detail="O valor da atividade deve ser maior que zero.")
+    return round(valor_float, 2)
 
 
 def validar_questoes_completas(questoes):
@@ -422,6 +436,7 @@ def atualizar_gabarito_prova(
 def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Header(default=None)):
     user = get_user_from_token(x_auth_token)
     validar_questoes_completas(payload.questoes)
+    valor_atividade = validar_valor_atividade(payload.valor_atividade)
     aluno_ids = payload.alunos_autorizados or []
     if not aluno_ids:
         raise HTTPException(
@@ -440,6 +455,7 @@ def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Heade
         payload.titulo.strip(),
         payload.questoes,
         payload.embaralhar_questoes,
+        valor_atividade,
     )
     try:
         ProvaService.salvar_alunos_autorizados(prova_id, aluno_ids)
@@ -452,6 +468,7 @@ def criar_prova(payload: ProvaCreatePayload, x_auth_token: Optional[str] = Heade
         "id": prova_id,
         "token": acesso["token"],
         "expira_em": format_expira_em(acesso["expira_em"]),
+        "valor_atividade": valor_atividade,
     }
 
 
@@ -502,6 +519,7 @@ def obter_prova_para_alteracao(prova_id: str, x_auth_token: Optional[str] = Head
             "materia": prova["materia"],
             "quantidade_questoes": len(questoes),
             "embaralhar_questoes": bool(int(prova.get("embaralhar_questoes") or 0)),
+            "valor_atividade": ProvaService.valor_atividade_da_prova(prova),
         },
         "questoes": questoes,
     }
@@ -520,10 +538,12 @@ def alterar_prova(
         questoes_atuais,
     )
     validar_questoes_completas(questoes_normalizadas)
+    valor_atividade = validar_valor_atividade(payload.valor_atividade)
     recalculadas = ProvaService.alterar_prova_e_recalcular(
         prova_id,
         questoes_normalizadas,
         payload.embaralhar_questoes,
+        valor_atividade,
     )
     return {
         "ok": True,
@@ -531,6 +551,7 @@ def alterar_prova(
         "respostas_recalculadas": recalculadas,
         "quantidade_questoes": len(questoes_normalizadas),
         "embaralhar_questoes": payload.embaralhar_questoes,
+        "valor_atividade": valor_atividade,
     }
 
 
@@ -581,6 +602,7 @@ def excluir_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=No
 def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default=None)):
     prova = validar_posse_prova(prova_id, x_auth_token)
     questoes = json.loads(prova["questoes"])
+    valor_atividade = ProvaService.valor_atividade_da_prova(prova)
     respostas = ProvaService.buscar_respostas(prova_id)
     eventos = obter_eventos_prova(prova_id)
     eventos_por_aluno: Dict[str, Dict[str, int]] = {}
@@ -612,7 +634,11 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
         resps = json.loads(r["respostas"])
         acertos = ProvaService.contar_acertos(questoes, resps)
         total_questoes = len(questoes)
-        nota_recalculada = ProvaService.calcular_nota_por_acertos(acertos, total_questoes)
+        nota_recalculada = ProvaService.calcular_nota_por_acertos(
+            acertos,
+            total_questoes,
+            valor_atividade,
+        )
         ev = eventos_por_aluno.get(r["nome_aluno"], {})
         detalhes_respostas = []
         for idx, questao in enumerate(questoes):
@@ -667,6 +693,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
                 "nome_aluno": r["nome_aluno"],
                 "numero_aluno": ev.get("numero_aluno", "-"),
                 "nota": nota_recalculada,
+                "valor_atividade": valor_atividade,
                 "acertos": acertos,
                 "total": total_questoes,
                 "respondida_em": r["respondida_em"],
@@ -676,7 +703,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
                 "respostas": detalhes_respostas,
             }
         )
-    media = round(sum(notas) / len(notas), 1) if notas else 0.0
+    media = round(sum(notas) / len(notas), 2) if notas else 0.0
     maior = max(notas) if notas else 0.0
     menor = min(notas) if notas else 0.0
     return {
@@ -687,6 +714,7 @@ def resultados_prova(prova_id: str, x_auth_token: Optional[str] = Header(default
             "media_turma": media,
             "maior_nota": maior,
             "menor_nota": menor,
+            "valor_atividade": valor_atividade,
             "acessos_total": sum(v["acessos"] for v in eventos_por_aluno.values()),
             "saidas_aba_total": sum(v["saidas_aba"] for v in eventos_por_aluno.values()),
         },
@@ -924,6 +952,7 @@ def buscar_prova_aluno(
         "aguardando_identificacao": True,
         "message": "Informe nome e numero para acessar a prova.",
         "expira_em": format_expira_em(acesso.get("expira_em")),
+        "valor_atividade": ProvaService.valor_atividade_da_prova(prova),
     }
 
 
@@ -948,6 +977,7 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
         )
     acesso_individual = garantir_acesso_individual_ativo(prova_id, payload.token, nome, device_id)
     questoes = json.loads(prova["questoes"])
+    valor_atividade = ProvaService.valor_atividade_da_prova(prova)
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
         respostas = ProvaService.buscar_respostas(prova_id)
         nome_normalizado = normalizar_nome(nome)
@@ -961,7 +991,8 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
             return {
                 "ok": True,
                 "ja_entregue": True,
-                "nota": ProvaService.calcular_nota(questoes, respostas_aluno),
+                "nota": ProvaService.calcular_nota(questoes, respostas_aluno, valor_atividade),
+                "valor_atividade": valor_atividade,
                 "acertos": acertos,
                 "total": len(questoes),
             }
@@ -984,6 +1015,7 @@ def aluno_login(prova_id: str, payload: AlunoLoginPayload):
         "ok": True,
         "ja_entregue": False,
         "questoes": questoes_publicas(questoes, ordem),
+        "valor_atividade": valor_atividade,
     }
 
 
@@ -1033,9 +1065,15 @@ def responder_prova(prova_id: str, payload: RespostaPayload):
     if ProvaService.aluno_ja_respondeu(prova_id, nome):
         raise HTTPException(status_code=400, detail="Aluno ja respondeu esta prova")
     questoes = json.loads(prova["questoes"])
-    nota = ProvaService.calcular_nota(questoes, payload.respostas)
+    valor_atividade = ProvaService.valor_atividade_da_prova(prova)
+    nota = ProvaService.calcular_nota(questoes, payload.respostas, valor_atividade)
     ProvaService.salvar_resposta(prova_id, nome, payload.respostas, nota)
     registrar_evento(prova_id, nome, "submit")
     ProvaService.finalizar_aluno_acesso(prova_id, payload.token, nome, device_id)
     acertos = ProvaService.contar_acertos(questoes, payload.respostas)
-    return {"nota": nota, "acertos": acertos, "total": len(questoes)}
+    return {
+        "nota": nota,
+        "valor_atividade": valor_atividade,
+        "acertos": acertos,
+        "total": len(questoes),
+    }

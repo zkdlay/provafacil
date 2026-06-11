@@ -13,11 +13,14 @@ CREATE TABLE IF NOT EXISTS provas (
     questoes TEXT,
     criada_em TEXT,
     requer_alunos_autorizados INTEGER DEFAULT 0,
-    embaralhar_questoes INTEGER DEFAULT 0
+    embaralhar_questoes INTEGER DEFAULT 0,
+    valor_atividade DOUBLE PRECISION DEFAULT 10
 );
 
 ALTER TABLE provas ADD COLUMN IF NOT EXISTS requer_alunos_autorizados INTEGER DEFAULT 0;
 ALTER TABLE provas ADD COLUMN IF NOT EXISTS embaralhar_questoes INTEGER DEFAULT 0;
+ALTER TABLE provas ADD COLUMN IF NOT EXISTS valor_atividade DOUBLE PRECISION DEFAULT 10;
+UPDATE provas SET valor_atividade = 10 WHERE valor_atividade IS NULL;
 
 CREATE TABLE IF NOT EXISTS turmas (
     id SERIAL PRIMARY KEY,

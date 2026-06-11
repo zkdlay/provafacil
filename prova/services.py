@@ -313,7 +313,24 @@ class ProvaService:
         return resposta == questao.get("gabarito")
 
     @staticmethod
-    def salvar_prova(usuario_id, materia, titulo, questoes, embaralhar_questoes=False):
+    def valor_atividade_da_prova(prova):
+        if not prova:
+            return 10.0
+        try:
+            valor = float(prova.get("valor_atividade") or 10)
+        except (TypeError, ValueError):
+            return 10.0
+        return valor if valor > 0 else 10.0
+
+    @staticmethod
+    def salvar_prova(
+        usuario_id,
+        materia,
+        titulo,
+        questoes,
+        embaralhar_questoes=False,
+        valor_atividade=10,
+    ):
         prova_id = str(uuid.uuid4())[:8]
         questoes = ProvaService.normalizar_questoes_para_salvar(questoes)
         Queries.inserir_prova(
@@ -323,6 +340,7 @@ class ProvaService:
             titulo,
             json.dumps(questoes, ensure_ascii=False),
             embaralhar_questoes,
+            valor_atividade,
         )
         return prova_id
 
@@ -393,11 +411,18 @@ class ProvaService:
 
     @staticmethod
     def atualizar_gabarito_e_recalcular(prova_id, questoes):
+        prova = Queries.get_prova(prova_id)
+        valor_atividade = ProvaService.valor_atividade_da_prova(prova)
         respostas = Queries.get_respostas_prova(prova_id)
         notas_respostas = []
         for resposta in respostas:
             respostas_aluno = json.loads(resposta["respostas"])
-            notas_respostas.append((resposta["id"], ProvaService.calcular_nota(questoes, respostas_aluno)))
+            notas_respostas.append(
+                (
+                    resposta["id"],
+                    ProvaService.calcular_nota(questoes, respostas_aluno, valor_atividade),
+                )
+            )
         Queries.update_gabarito_e_notas(
             prova_id,
             json.dumps(questoes, ensure_ascii=False),
@@ -406,16 +431,27 @@ class ProvaService:
         return len(notas_respostas)
 
     @staticmethod
-    def alterar_prova_e_recalcular(prova_id, questoes, embaralhar_questoes=False):
+    def alterar_prova_e_recalcular(
+        prova_id,
+        questoes,
+        embaralhar_questoes=False,
+        valor_atividade=10,
+    ):
         respostas = Queries.get_respostas_prova(prova_id)
         notas_respostas = []
         for resposta in respostas:
             respostas_aluno = json.loads(resposta["respostas"])
-            notas_respostas.append((resposta["id"], ProvaService.calcular_nota(questoes, respostas_aluno)))
+            notas_respostas.append(
+                (
+                    resposta["id"],
+                    ProvaService.calcular_nota(questoes, respostas_aluno, valor_atividade),
+                )
+            )
         Queries.update_prova_com_recalculo(
             prova_id,
             json.dumps(questoes, ensure_ascii=False),
             embaralhar_questoes,
+            valor_atividade,
             notas_respostas,
         )
         return len(notas_respostas)
@@ -493,13 +529,19 @@ class ProvaService:
         )
 
     @staticmethod
-    def calcular_nota(questoes, respostas_aluno):
+    def calcular_nota(questoes, respostas_aluno, valor_atividade=10):
         total = len(questoes)
         acertos = ProvaService.contar_acertos(questoes, respostas_aluno)
-        return ProvaService.calcular_nota_por_acertos(acertos, total)
+        return ProvaService.calcular_nota_por_acertos(acertos, total, valor_atividade)
 
     @staticmethod
-    def calcular_nota_por_acertos(acertos, total):
+    def calcular_nota_por_acertos(acertos, total, valor_atividade=10):
         if total <= 0:
             return 0
-        return round((acertos / total) * 10, 2)
+        try:
+            valor = float(valor_atividade or 10)
+        except (TypeError, ValueError):
+            valor = 10.0
+        if valor <= 0:
+            valor = 10.0
+        return round((acertos / total) * valor, 2)

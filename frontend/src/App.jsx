@@ -17,6 +17,12 @@ import {
 const LETRAS = ["A", "B", "C", "D", "E"];
 const LINK_EXPIRATION_LABEL = "1 hora e 10 minutos";
 
+function formatarNumero(valor) {
+  const numero = Number(valor ?? 0);
+  if (!Number.isFinite(numero)) return "0";
+  return Number.isInteger(numero) ? String(numero) : numero.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 function toBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -55,6 +61,7 @@ function toCsv(rows) {
     "Aluno",
     "Numero",
     "Nota",
+    "Valor atividade",
     "Acertos",
     "Acessos",
     "Saidas aba",
@@ -66,6 +73,7 @@ function toCsv(rows) {
       r.nome_aluno,
       r.numero_aluno,
       r.nota,
+      r.valor_atividade,
       `${r.acertos}/${r.total}`,
       r.acessos,
       r.saidas_aba,
@@ -194,6 +202,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     modo: "multipla_escolha",
     qtdOp: 4,
     embaralhar: false,
+    valorAtividade: 10,
   };
   const [config, setConfig] = useState(configInicial);
   const [etapaCriacao, setEtapaCriacao] = useState(1);
@@ -214,6 +223,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
   const alunosSelecionadosSet = new Set(alunosSelecionados.map(Number));
   const totalQuestoes = Number(config.qtd) || 0;
   const totalOpcoes = Number(config.qtdOp) || 0;
+  const valorAtividade = Number(config.valorAtividade);
   const quantidadeOpcoes = totalOpcoes || 4;
 
   function opcoesNormalizadas(q = {}) {
@@ -299,6 +309,10 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     }
     if (!Number.isInteger(totalQuestoes) || totalQuestoes < 1 || totalQuestoes > 50) {
       setErro("Informe uma quantidade de questoes entre 1 e 50.");
+      return false;
+    }
+    if (!Number.isFinite(valorAtividade) || valorAtividade <= 0) {
+      setErro("Informe um valor da atividade maior que zero.");
       return false;
     }
     if (config.modo !== "texto" && (!Number.isInteger(totalOpcoes) || totalOpcoes < 2 || totalOpcoes > 5)) {
@@ -450,6 +464,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
             questoes: montarQuestoesPayload(),
             alunos_autorizados: alunosSelecionados,
             embaralhar_questoes: Boolean(config.embaralhar),
+            valor_atividade: valorAtividade,
           }),
         },
         token
@@ -496,6 +511,14 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
           <input list="materias" placeholder="Materia" value={config.materia} onChange={(e) => setConfig((c) => ({ ...c, materia: e.target.value }))} />
           <datalist id="materias">{materias.map((m) => <option key={m} value={m} />)}</datalist>
           <input placeholder="Titulo" value={config.titulo} onChange={(e) => setConfig((c) => ({ ...c, titulo: e.target.value }))} />
+          <label>Valor da atividade</label>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={config.valorAtividade}
+            onChange={(e) => setConfig((c) => ({ ...c, valorAtividade: e.target.value }))}
+          />
           <label>Quantidade de questoes</label>
           <input type="number" min="1" max="50" value={config.qtd} onChange={(e) => setConfig((c) => ({ ...c, qtd: e.target.value }))} />
           <select value={config.modo} onChange={(e) => setConfig((c) => ({ ...c, modo: e.target.value }))}>
@@ -640,6 +663,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
           <div className="summary-grid">
             <div className="stat-card"><strong>Titulo</strong><span>{config.titulo || "-"}</span></div>
             <div className="stat-card"><strong>Materia</strong><span>{config.materia || "-"}</span></div>
+            <div className="stat-card"><strong>Valor</strong><span>{formatarNumero(valorAtividade)} pontos</span></div>
             <div className="stat-card"><strong>Questoes</strong><span>{questoes.length}</span></div>
             <div className="stat-card"><strong>Alunos autorizados</strong><span>{alunosSelecionados.length}</span></div>
           </div>
@@ -870,6 +894,7 @@ function DashboardProfessor() {
   const [alterandoProvaId, setAlterandoProvaId] = useState("");
   const [questoesAlteracao, setQuestoesAlteracao] = useState([]);
   const [embaralharAlteracao, setEmbaralharAlteracao] = useState(false);
+  const [valorAtividadeAlteracao, setValorAtividadeAlteracao] = useState(10);
   const [carregandoAlteracaoId, setCarregandoAlteracaoId] = useState("");
   const [salvandoAlteracaoId, setSalvandoAlteracaoId] = useState("");
   const [mensagemProvas, setMensagemProvas] = useState("");
@@ -1217,6 +1242,7 @@ function DashboardProfessor() {
       const data = await buscarProvaAlteracao(provaId, auth.token);
       setQuestoesAlteracao((data.questoes || []).map((q) => normalizarQuestaoAlteracao(q)));
       setEmbaralharAlteracao(Boolean(data.prova?.embaralhar_questoes));
+      setValorAtividadeAlteracao(data.prova?.valor_atividade ?? 10);
     } catch (e) {
       setErro(getErrorMessage(e));
       setAlterandoProvaId("");
@@ -1231,6 +1257,7 @@ function DashboardProfessor() {
     setAlterandoProvaId("");
     setQuestoesAlteracao([]);
     setEmbaralharAlteracao(false);
+    setValorAtividadeAlteracao(10);
     setMensagemProvas("");
   }
 
@@ -1360,6 +1387,11 @@ function DashboardProfessor() {
   }
 
   function validarAlteracaoProva() {
+    const valorAtividade = Number(valorAtividadeAlteracao);
+    if (!Number.isFinite(valorAtividade) || valorAtividade <= 0) {
+      setErro("Informe um valor da atividade maior que zero.");
+      return false;
+    }
     if (!questoesAlteracao.length) {
       setErro("Adicione pelo menos uma questao.");
       return false;
@@ -1432,12 +1464,14 @@ function DashboardProfessor() {
         {
           questoes: montarQuestoesAlteracaoPayload(),
           embaralhar_questoes: Boolean(embaralharAlteracao),
+          valor_atividade: Number(valorAtividadeAlteracao),
         },
         auth.token
       );
       setMensagemProvas(data?.message || "Prova alterada e notas recalculadas.");
       setAlterandoProvaId("");
       setQuestoesAlteracao([]);
+      setValorAtividadeAlteracao(10);
       setResultados([]);
       setEstatisticasResultados(null);
       setRespostasAbertasId("");
@@ -1571,7 +1605,10 @@ function DashboardProfessor() {
             return (
               <article className="list-item" key={p.id}>
                 <strong>{p.titulo}</strong>
-                <span>{p.materia} - {p.quantidade_questoes} questoes</span>
+                <span>
+                  {p.materia} - {p.quantidade_questoes} questoes - Valor:{" "}
+                  {formatarNumero(p.valor_atividade ?? 10)} pontos
+                </span>
                 {link ? <input readOnly value={link} /> : <span>Nenhum link ativo. Gere um novo link para enviar aos alunos.</span>}
                 {p.expira_em ? <span>Válido até {new Date(p.expira_em).toLocaleString()}.</span> : null}
                 <div className="actions">
@@ -1670,13 +1707,24 @@ function DashboardProfessor() {
                     <div className="section-title-row compact">
                       <div>
                         <strong>Alterar prova</strong>
-                        <span>Edite questoes, alternativas, imagens, gabaritos e embaralhamento.</span>
+                        <span>Edite questoes, alternativas, imagens, gabaritos, valor e embaralhamento.</span>
                       </div>
                     </div>
                     {carregandoAlteracaoId === p.id ? (
                       <p>Carregando prova...</p>
                     ) : (
                       <>
+                        <label>
+                          Valor da atividade
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={valorAtividadeAlteracao}
+                            disabled={salvandoAlteracaoId === p.id}
+                            onChange={(e) => setValorAtividadeAlteracao(e.target.value)}
+                          />
+                        </label>
                         <label className="check-row shuffle-toggle">
                           <input
                             type="checkbox"
@@ -1868,9 +1916,9 @@ function DashboardProfessor() {
           {estatisticasResultados ? (
             <div className="stats-grid">
               <div className="stat-card"><strong>Alunos</strong><span>{estatisticasResultados.alunos}</span></div>
-              <div className="stat-card"><strong>Media da turma</strong><span>{estatisticasResultados.media_turma}</span></div>
-              <div className="stat-card"><strong>Maior nota</strong><span>{estatisticasResultados.maior_nota}</span></div>
-              <div className="stat-card"><strong>Menor nota</strong><span>{estatisticasResultados.menor_nota}</span></div>
+              <div className="stat-card"><strong>Media da turma</strong><span>{formatarNumero(estatisticasResultados.media_turma)} / {formatarNumero(estatisticasResultados.valor_atividade ?? 10)}</span></div>
+              <div className="stat-card"><strong>Maior nota</strong><span>{formatarNumero(estatisticasResultados.maior_nota)} / {formatarNumero(estatisticasResultados.valor_atividade ?? 10)}</span></div>
+              <div className="stat-card"><strong>Menor nota</strong><span>{formatarNumero(estatisticasResultados.menor_nota)} / {formatarNumero(estatisticasResultados.valor_atividade ?? 10)}</span></div>
             </div>
           ) : null}
           <div className="table-wrap">
@@ -1895,7 +1943,7 @@ function DashboardProfessor() {
                     <tr key={`${detalheId}-linha`}>
                       <td>{r.nome_aluno}</td>
                       <td>{r.numero_aluno}</td>
-                      <td>{r.nota}</td>
+                      <td>{formatarNumero(r.nota)} / {formatarNumero(r.valor_atividade ?? estatisticasResultados?.valor_atividade ?? 10)}</td>
                       <td>{r.acertos}/{r.total}</td>
                       <td>{r.acessos}</td>
                       <td>{r.saidas_aba}</td>
@@ -1923,7 +1971,11 @@ function DashboardProfessor() {
                             <div className="section-title-row compact">
                               <div>
                                 <strong>Respostas de {r.nome_aluno}</strong>
-                                <span>Nota {r.nota} - {r.acertos}/{r.total} acertos</span>
+                                <span>
+                                  Nota {formatarNumero(r.nota)} / {formatarNumero(r.valor_atividade ?? estatisticasResultados?.valor_atividade ?? 10)}
+                                  {" - "}
+                                  {r.acertos}/{r.total} acertos
+                                </span>
                               </div>
                               <button className="secondary" onClick={() => setRespostasAbertasId("")}>Fechar</button>
                             </div>
@@ -2258,12 +2310,22 @@ function AlunoPage() {
         body: JSON.stringify({ nome_aluno: nome, numero, token, device_id: deviceId })
       });
       if (data.ja_entregue) {
-        setResultado({ nota: data.nota, acertos: data.acertos, total: data.total, entregue: true });
+        setResultado({
+          nota: data.nota,
+          valor_atividade: data.valor_atividade,
+          acertos: data.acertos,
+          total: data.total,
+          entregue: true,
+        });
         setLogado(false);
         return;
       }
       if (Array.isArray(data.questoes)) {
-        setProva((atual) => ({ ...atual, questoes: data.questoes }));
+        setProva((atual) => ({
+          ...atual,
+          questoes: data.questoes,
+          valor_atividade: data.valor_atividade ?? atual?.valor_atividade,
+        }));
       }
       setLogado(true);
     } catch (e) {
@@ -2320,7 +2382,10 @@ function AlunoPage() {
       <main className="page">
         <section className="card">
           <h2>Prova entregue</h2>
-          <p>Nota: {resultado.nota}</p>
+          <p>
+            Nota: {formatarNumero(resultado.nota)} /{" "}
+            {formatarNumero(resultado.valor_atividade ?? prova?.valor_atividade ?? 10)}
+          </p>
           <p>Acertos: {resultado.acertos}/{resultado.total}</p>
         </section>
       </main>

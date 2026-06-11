@@ -13,7 +13,15 @@ SCHEMA_PATH = ROOT_DIR / "database" / "schema_postgres.sql"
 
 TABLES = {
     "usuarios": ["id", "usuario", "senha", "criado_em"],
-    "provas": ["id", "usuario_id", "materia", "titulo", "questoes", "criada_em"],
+    "provas": [
+        "id",
+        "usuario_id",
+        "materia",
+        "titulo",
+        "questoes",
+        "criada_em",
+        "valor_atividade",
+    ],
     "respostas": [
         "id",
         "prova_id",
@@ -46,6 +54,8 @@ def sqlite_rows(sqlite_conn, table_name):
         item = dict(row)
         for col in TABLES[table_name]:
             item.setdefault(col, None)
+        if table_name == "provas" and item.get("valor_atividade") is None:
+            item["valor_atividade"] = 10
         normalized.append(item)
     return normalized
 

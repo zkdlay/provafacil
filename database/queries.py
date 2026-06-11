@@ -44,7 +44,15 @@ class Queries:
             conn.close()
 
     @staticmethod
-    def inserir_prova(prova_id, usuario_id, materia, titulo, questoes_json, embaralhar_questoes=0):
+    def inserir_prova(
+        prova_id,
+        usuario_id,
+        materia,
+        titulo,
+        questoes_json,
+        embaralhar_questoes=0,
+        valor_atividade=10,
+    ):
         conn = dm.get_conn()
         try:
             with conn.cursor() as cur:
@@ -52,9 +60,9 @@ class Queries:
                     """
                     INSERT INTO provas (
                         id, usuario_id, materia, titulo, questoes, criada_em,
-                        requer_alunos_autorizados, embaralhar_questoes
+                        requer_alunos_autorizados, embaralhar_questoes, valor_atividade
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, 1, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s)
                     """,
                     (
                         prova_id,
@@ -64,6 +72,7 @@ class Queries:
                         questoes_json,
                         datetime.now().strftime("%d/%m/%Y %H:%M"),
                         int(bool(embaralhar_questoes)),
+                        float(valor_atividade or 10),
                     ),
                 )
             conn.commit()
@@ -111,7 +120,13 @@ class Queries:
             conn.close()
 
     @staticmethod
-    def update_prova_com_recalculo(prova_id, questoes_json, embaralhar_questoes, notas_respostas):
+    def update_prova_com_recalculo(
+        prova_id,
+        questoes_json,
+        embaralhar_questoes,
+        valor_atividade,
+        notas_respostas,
+    ):
         conn = dm.get_conn()
         try:
             with conn.cursor() as cur:
@@ -119,10 +134,16 @@ class Queries:
                     """
                     UPDATE provas
                     SET questoes=%s,
-                        embaralhar_questoes=%s
+                        embaralhar_questoes=%s,
+                        valor_atividade=%s
                     WHERE id=%s
                     """,
-                    (questoes_json, int(bool(embaralhar_questoes)), prova_id),
+                    (
+                        questoes_json,
+                        int(bool(embaralhar_questoes)),
+                        float(valor_atividade or 10),
+                        prova_id,
+                    ),
                 )
                 for resposta_id, nota in notas_respostas:
                     cur.execute(
