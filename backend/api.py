@@ -1,9 +1,11 @@
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta, timezone
 import json
-import uuid
+import os
+import jwt
 
 from auth.professor import AuthService
 from prova.services import ProvaService
@@ -11,6 +13,14 @@ from eventos.rastreamento import registrar_evento, obter_eventos_prova
 from core.constants import LINK_EXPIRATION_MINUTES, MATERIAS_PADRAO
 from core.normalization import normalizar_nome
 
+
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    if os.getenv("RENDER"):
+        raise RuntimeError("JWT_SECRET precisa estar configurado no Render.")
+    JWT_SECRET = "dev-secret-change-me"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 12
 
 app = FastAPI(title="Prova Facil API")
 
@@ -24,7 +34,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+@app.middleware("http")
+async def log_auth_failures(request: Request, call_next):
+    response = await call_next(request)
+    if response.status_code == 401:
+        token = request.headers.get("x-auth-token")
+        print(
+            "[AUTH_DEBUG] 401 response -> "
+            f"method={request.method} endpoint={request.url.path} "
+            f"x_auth_token_present={token is not None and token != ''} "
+            f"token_size={len(token) if token else 0}"
+        )
+    return response
+
 LETRAS_GABARITO = ["A", "B", "C", "D", "E"]
 
 
@@ -88,10 +111,37 @@ class RespostaPayload(BaseModel):
     device_id: Optional[str] = None
 
 
+def criar_token_professor(usuario_id: int, usuario_nome: str):
+    expira_em = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
+    payload = {
+        "usuario_id": usuario_id,
+        "usuario_nome": usuario_nome,
+        "exp": expira_em,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
 def get_user_from_token(token: Optional[str]):
-    if not token or token not in SESSIONS:
+    token_present = bool(token)
+    token_size = len(token) if token else 0
+    print(
+        "[AUTH_DEBUG] validating token -> "
+        f"token_present={token_present} token_size={token_size}"
+    )
+    if not token:
         raise HTTPException(status_code=401, detail="Nao autenticado")
-    return SESSIONS[token]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Sessão expirada. Faça login novamente.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Nao autenticado")
+
+    usuario_id = payload.get("usuario_id")
+    usuario_nome = payload.get("usuario_nome")
+    if not usuario_id or not usuario_nome:
+        raise HTTPException(status_code=401, detail="Nao autenticado")
+    return {"usuario_id": usuario_id, "usuario_nome": usuario_nome}
 
 
 def validar_posse_prova(prova_id: str, token: Optional[str]):
@@ -333,8 +383,7 @@ def login(payload: LoginPayload):
     ok, uid = AuthService.verificar_login(payload.usuario.strip(), payload.senha)
     if not ok:
         raise HTTPException(status_code=401, detail="Usuario ou senha invalidos")
-    token = str(uuid.uuid4())
-    SESSIONS[token] = {"usuario_id": uid, "usuario_nome": payload.usuario.strip()}
+    token = criar_token_professor(uid, payload.usuario.strip())
     return {"token": token, "usuario_id": uid, "usuario_nome": payload.usuario.strip()}
 
 

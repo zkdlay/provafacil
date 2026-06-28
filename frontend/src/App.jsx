@@ -16,6 +16,38 @@ import {
 
 const LETRAS = ["A", "B", "C", "D", "E"];
 const LINK_EXPIRATION_LABEL = "1 hora e 10 minutos";
+const AUTH_STORAGE_KEY = "provafacil_auth";
+
+function readStoredAuth() {
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const auth = JSON.parse(raw);
+    if (!auth?.token || !auth?.usuario_id || !auth?.usuario_nome) return null;
+    return {
+      token: auth.token,
+      usuario_id: auth.usuario_id,
+      usuario_nome: auth.usuario_nome,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredAuth(auth) {
+  window.localStorage.setItem(
+    AUTH_STORAGE_KEY,
+    JSON.stringify({
+      token: auth.token,
+      usuario_id: auth.usuario_id,
+      usuario_nome: auth.usuario_nome,
+    })
+  );
+}
+
+function clearStoredAuth() {
+  window.localStorage.removeItem(AUTH_STORAGE_KEY);
+}
 
 function formatarNumero(valor) {
   const numero = Number(valor ?? 0);
@@ -85,11 +117,15 @@ function toCsv(rows) {
   return [header.map(escapeCell).join(","), ...body].join("\n");
 }
 
-function AuthProfessor({ onLogin }) {
+function AuthProfessor({ onLogin, initialError = "" }) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [authAction, setAuthAction] = useState("");
+
+  useEffect(() => {
+    setErro(initialError);
+  }, [initialError]);
 
   async function entrar() {
     if (authAction) return;
@@ -194,7 +230,7 @@ function AuthProfessor({ onLogin }) {
   );
 }
 
-function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
+function CriacaoProva({ token, turmas, carregandoTurmas, onCreated, onAuthError }) {
   const configInicial = {
     materia: "",
     titulo: "",
@@ -475,6 +511,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
       await onCreated();
     } catch (e) {
       gerarLinkLockRef.current = false;
+      if (onAuthError?.(e)) return;
       setErro(getErrorMessage(e));
     } finally {
       setLoadingGerarLink(false);
@@ -694,7 +731,7 @@ function CriacaoProva({ token, turmas, carregandoTurmas, onCreated }) {
     </section>
   );
 }
-function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh }) {
+function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh, onAuthError }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [nomeTurma, setNomeTurma] = useState("");
   const [qtdAlunos, setQtdAlunos] = useState(1);
@@ -750,6 +787,7 @@ function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh }) {
       setMostrarForm(false);
       await onRefresh();
     } catch (e) {
+      if (onAuthError?.(e)) return;
       setErro(getErrorMessage(e));
     } finally {
       setSalvando(false);
@@ -768,6 +806,7 @@ function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh }) {
       setMensagem("Turma excluida com sucesso.");
       await onRefresh();
     } catch (e) {
+      if (onAuthError?.(e)) return;
       setErro(getErrorMessage(e));
     } finally {
       setExcluindoTurmaId("");
@@ -867,7 +906,8 @@ function TurmasAlunos({ token, turmas, totalAlunos, carregando, onRefresh }) {
 }
 
 function DashboardProfessor() {
-  const [auth, setAuth] = useState(null);
+  const [auth, setAuth] = useState(() => readStoredAuth());
+  const [authNotice, setAuthNotice] = useState("");
   const [aba, setAba] = useState("criar");
   const [provas, setProvas] = useState([]);
   const [turmas, setTurmas] = useState([]);
@@ -904,6 +944,35 @@ function DashboardProfessor() {
   const resultadosRequestRef = useRef(0);
   const monitoramentoRequestRef = useRef(0);
 
+  function handleLogin(data) {
+    saveStoredAuth(data);
+    setAuth(data);
+    setAuthNotice("");
+    setErro("");
+  }
+
+  function clearAuth(message = "") {
+    clearStoredAuth();
+    setAuth(null);
+    setAuthNotice(message);
+  }
+
+  function handleAuthError(error) {
+    const message = getErrorMessage(error);
+    if (error?.status === 401) {
+      clearAuth(message);
+      return true;
+    }
+    return false;
+  }
+
+  function handleApiError(error, setMessage = setErro) {
+    if (handleAuthError(error)) return true;
+    const message = getErrorMessage(error);
+    setMessage(message);
+    return false;
+  }
+
   async function carregarProvas(token = auth?.token, preferredSelectedId = provaSelecionada) {
     if (!token) return;
     try {
@@ -917,7 +986,7 @@ function DashboardProfessor() {
       setProvaSelecionada(selectedStillExists ? preferredSelectedId : data[0].id);
       return data;
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
       return [];
     }
   }
@@ -934,7 +1003,7 @@ function DashboardProfessor() {
       setAlunos(alunosData || []);
       return turmasData || [];
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
       return [];
     } finally {
       setCarregandoTurmas(false);
@@ -964,7 +1033,7 @@ function DashboardProfessor() {
         })
         .catch((e) => {
           if (resultadosRequestRef.current !== requestId) return;
-          setErro(getErrorMessage(e));
+          handleApiError(e);
         })
         .finally(() => {
           if (resultadosRequestRef.current === requestId) setCarregandoResultados(false);
@@ -988,7 +1057,7 @@ function DashboardProfessor() {
           })
           .catch((e) => {
             if (monitoramentoRequestRef.current !== requestId) return;
-            setErro(getErrorMessage(e));
+            handleApiError(e);
           })
           .finally(() => {
             if (monitoramentoRequestRef.current === requestId) setCarregandoMonitoramento(false);
@@ -1030,7 +1099,7 @@ function DashboardProfessor() {
         cancelarAlteracaoProva();
       }
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
     } finally {
       deleteLockRef.current = "";
       setExcluindoId("");
@@ -1073,7 +1142,7 @@ function DashboardProfessor() {
         setErro("Novo link gerado, mas nao foi possivel copiar automaticamente.");
       }
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
     } finally {
       setRenovandoLinkId("");
     }
@@ -1128,7 +1197,7 @@ function DashboardProfessor() {
       const data = await listarAlunosAutorizadosProva(provaId, auth.token);
       setAlunosAutorizadosEdicao((data.alunos_autorizados || []).map(Number));
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
       setEditandoAlunosProvaId("");
       setAlunosAutorizadosEdicao([]);
     } finally {
@@ -1158,7 +1227,7 @@ function DashboardProfessor() {
       setEditandoAlunosProvaId("");
       setAlunosAutorizadosEdicao([]);
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
     } finally {
       setSalvandoAutorizadosId("");
     }
@@ -1244,7 +1313,7 @@ function DashboardProfessor() {
       setEmbaralharAlteracao(Boolean(data.prova?.embaralhar_questoes));
       setValorAtividadeAlteracao(data.prova?.valor_atividade ?? 10);
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
       setAlterandoProvaId("");
       setQuestoesAlteracao([]);
     } finally {
@@ -1478,7 +1547,7 @@ function DashboardProfessor() {
       resultadosRequestRef.current += 1;
       await carregarProvas(auth.token, provaSelecionada);
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
     } finally {
       setSalvandoAlteracaoId("");
     }
@@ -1508,7 +1577,7 @@ function DashboardProfessor() {
         )
       );
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
     } finally {
       setDesbloqueandoAcessos((prev) => prev.filter((id) => id !== acessoId));
     }
@@ -1553,13 +1622,13 @@ function DashboardProfessor() {
       setRespostasAbertasId("");
       setMensagemResultados("Tentativa excluida. O aluno podera responder novamente se nao estiver bloqueado.");
     } catch (e) {
-      setErro(getErrorMessage(e));
+      handleApiError(e);
     } finally {
       setExcluindoTentativaId("");
     }
   }
 
-  if (!auth) return <AuthProfessor onLogin={setAuth} />;
+  if (!auth) return <AuthProfessor onLogin={handleLogin} initialError={authNotice} />;
 
   return (
     <main className="page">
@@ -1580,6 +1649,7 @@ function DashboardProfessor() {
           turmas={turmas}
           carregandoTurmas={carregandoTurmas}
           onCreated={() => carregarProvas()}
+          onAuthError={handleAuthError}
         />
       ) : null}
 
@@ -1590,6 +1660,7 @@ function DashboardProfessor() {
           totalAlunos={alunos.length}
           carregando={carregandoTurmas}
           onRefresh={() => carregarTurmas(auth.token)}
+          onAuthError={handleAuthError}
         />
       ) : null}
 

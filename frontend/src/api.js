@@ -51,6 +51,7 @@ export async function api(path, options = {}, token) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(getErrorMessage(data));
+    error.status = response.status;
     error.detail = data.detail;
     error.response = data;
     throw error;

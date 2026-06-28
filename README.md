@@ -10,13 +10,16 @@ Sistema de provas online com frontend React, backend FastAPI e banco PostgreSQL.
 
 ## Configuracao
 
-Crie um arquivo `.env` na raiz do projeto com a URL do banco PostgreSQL:
+Crie um arquivo `.env` na raiz do projeto com a URL do banco PostgreSQL e uma chave para assinar os tokens JWT:
 
 ```bash
 DATABASE_URL=postgresql://usuario:senha@host:5432/banco
+JWT_SECRET=troque-por-uma-chave-grande-e-aleatoria
 ```
 
 No Supabase, use a connection string do banco PostgreSQL. Se o provedor exigir SSL, inclua `?sslmode=require` no fim da URL.
+
+O backend usa `JWT_SECRET` para manter a autenticacao do professor valida entre reinicios do servidor. Em ambiente local, se `JWT_SECRET` nao existir, a API usa um fallback apenas para desenvolvimento. Em producao, configure obrigatoriamente `JWT_SECRET` nas variaveis de ambiente do Render. Nao coloque essa chave no frontend nem no GitHub; o arquivo `.env` ja esta no `.gitignore`.
 
 ## Como rodar localmente
 
@@ -94,7 +97,7 @@ O script:
 
 ### Backend: Render
 1. Crie um Web Service apontando para este repositório.
-2. Configure `DATABASE_URL` em Environment Variables.
+2. Configure `DATABASE_URL` e `JWT_SECRET` em Environment Variables.
 3. Use o comando de start:
 ```bash
 uvicorn backend.api:app --host 0.0.0.0 --port $PORT
